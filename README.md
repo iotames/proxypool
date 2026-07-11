@@ -38,6 +38,34 @@ proxypool.exe
 - 查看代理池概况和节点列表
 - 支持停止/重新启动
 
+配置加载流程：
+
+```bash
+# 启动 Web 模式
+  config.Load(confDir, false)
+    ├─ easyconf.NewConf("./.env", "./default.env") 
+    ├─ Parse(false)
+    │   ├─ SetValuesByEnvFile("default.env")   ← 读取 default.env
+    │   ├─ SetValuesByEnvFile(".env")            ← 读取 .env（覆盖前者）
+    │   └─ SetValuesByEnv()                      ← 系统环境变量（覆盖文件）
+    └─ 返回 *Conf{Port, ConfPath, GoogleTimeout, ...}
+
+# 用户点击「启动隧道代理」
+   前端 startProxy()
+      └─ saveConfig()
+           └─ PUT /api/config {GOOGLE_TIMEOUT:300, PORT:1080, ...}
+                ├─ 更新 s.cfg.Port, s.cfg.GoogleTimeout …  (内存)
+                └─ s.cfg.Save() → UpdateFile(".env")        (持久化)
+      └─ POST /api/start
+           └─ startProxy(confDir)
+                └─ goroutine → runProxy(confDir, s.cfg, ...)
+                     ├─ clash.ParseFile(s.cfg.ConfPath)       ← 用新配置
+                     ├─ node.TestNodes(..., s.cfg.GoogleTimeout)
+                     ├─ proxy.NewServer("IP:PORT", ...)
+                     └─ health.NewChecker(..., s.cfg.HealthInterval)
+```
+
+
 ## 命令行参数
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -55,6 +83,7 @@ proxypool.exe
 | `HEALTH_INTERVAL` | 60 | 健康检查间隔（秒） |
 | `POOL_MAX_SIZE` | 0 | 代理池最大节点数，0 表示不限制 |
 | `BIND_ADDRESS` | 127.0.0.1 | 代理服务绑定 IP |
+
 
 ## 工作原理
 

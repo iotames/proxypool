@@ -10,6 +10,7 @@ default.env
 # 配置文件
 main/*.yaml
 main/*.yml
+*.toml
 
 # IDE
 .idea/

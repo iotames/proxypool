@@ -42,6 +42,11 @@ th { color: #636e72; font-weight: 500; }
 .status-tag.untested { background: #e2e3e5; color: #383d41; }
 .hidden { display: none !important; }
 .action-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; font-size: 14px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,.15); animation: toastFadeIn .3s; max-width: 400px; }
+.toast.success { background: #00b894; color: #fff; }
+.toast.warning { background: #fdcb6e; color: #2d3436; }
+.toast.error { background: #d63031; color: #fff; }
+@keyframes toastFadeIn { from { opacity:0; transform: translateY(-10px); } to { opacity:1; transform: translateY(0); } }
 @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -81,6 +86,9 @@ th { color: #636e72; font-weight: 500; }
         <input id="bindAddress" value="127.0.0.1">
       </div>
     </div>
+    <div style="display:flex;justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-success" onclick="updateConfig()">💾 更新</button>
+    </div>
   </div>
 
   <div class="card">
@@ -109,6 +117,7 @@ th { color: #636e72; font-weight: 500; }
     <h2>节点列表</h2>
     <div id="nodeList"><p style="color:#b2bec3;font-size:13px;">启动代理后自动加载</p></div>
   </div>
+  <div id="toast" class="toast hidden"></div>
 </div>
 
 <script>
@@ -142,15 +151,44 @@ async function saveConfig() {
     POOL_MAX_SIZE: parseInt(document.getElementById('poolMaxSize').value),
     BIND_ADDRESS: document.getElementById('bindAddress').value,
   };
-  await fetchJSON('/api/config', {
+  const resp = await fetchJSON('/api/config', {
     method: 'PUT',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(data)
   });
+  if (!resp.success) {
+    throw new Error(resp.error || '保存配置失败');
+  }
+  return resp;
+}
+
+// 更新配置（独立按钮）
+async function updateConfig() {
+  try {
+    await saveConfig();
+    showToast('✅ 配置已更新', 'success');
+  } catch(e) {
+    showToast('❌ ' + e.message, 'error');
+  }
+}
+
+function showToast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast ' + (type || 'success');
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 3000);
 }
 
 async function startProxy() {
-  await saveConfig();
+  try {
+    await saveConfig();
+  } catch(e) {
+    showToast('❌ 配置保存失败: ' + e.message, 'error');
+    addLog('❌ 配置保存失败: ' + e.message);
+    return;
+  }
+
   document.getElementById('btnStart').disabled = true;
   document.getElementById('progressCard').classList.remove('hidden');
   document.getElementById('progressLog').textContent = '';
@@ -158,12 +196,15 @@ async function startProxy() {
   try {
     const resp = await fetchJSON('/api/start', {method: 'POST'});
     if (!resp.success) {
-      addLog('❌ ' + (resp.error || '启动失败'));
+      const err = resp.error || '启动失败';
+      addLog('❌ ' + err);
+      showToast('❌ ' + err, 'error');
       document.getElementById('btnStart').disabled = false;
       return;
     }
   } catch(e) {
     addLog('❌ 启动请求失败: ' + e.message);
+    showToast('❌ 启动请求失败: ' + e.message, 'error');
     document.getElementById('btnStart').disabled = false;
     return;
   }
@@ -176,8 +217,11 @@ async function stopProxy() {
   try {
     await fetchJSON('/api/stop', {method: 'POST'});
     addLog('⏹ 代理已停止');
+    showToast('⏹ 代理已停止', 'success');
   } catch(e) {
-    addLog('⏹ 停止请求已发送');
+    const msg = e.message || '停止请求已发送';
+    addLog('⏹ ' + msg);
+    showToast('⚠️ ' + msg, 'warning');
   }
   document.getElementById('btnStart').disabled = false;
   updateStatus();
