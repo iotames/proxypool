@@ -1,0 +1,26 @@
+# 编译产物
+*.exe
+*.exe~
+*.out
+
+# 运行时生成的环境配置文件（由 easyconf 自动创建）
+.env
+default.env
+
+# 配置文件
+*.yaml
+
+# IDE
+.idea/
+.vscode/
+.reasonix/
+
+# 依赖包
+easyconf/
+
+# 临时文件
+*.tmp
+*.swp
+
+# 其他
+go.sum

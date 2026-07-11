@@ -1,0 +1,152 @@
+package pool
+
+import (
+	"testing"
+
+	"github.com/iotames/proxypool/internal/node"
+)
+
+func newNode(name, ntype string, latency int64) *node.Node {
+	return &node.Node{
+		Name:    name,
+		Type:    ntype,
+		Server:  "test.com",
+		Port:    443,
+		Latency: latency,
+		Status:  "available",
+	}
+}
+
+func TestPoolAddAndSize(t *testing.T) {
+	p := New(0) // 不限制大小
+
+	if p.Size() != 0 {
+		t.Fatalf("新池大小应为 0, 实际 %d", p.Size())
+	}
+
+	p.Add(newNode("node1", "trojan", 100))
+	if p.Size() != 1 {
+		t.Fatalf("添加后大小应为 1, 实际 %d", p.Size())
+	}
+
+	p.Add(newNode("node2", "trojan", 200))
+	if p.Size() != 2 {
+		t.Fatalf("添加后大小应为 2, 实际 %d", p.Size())
+	}
+}
+
+func TestPoolAddDuplicate(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 100))
+	added := p.Add(newNode("node1", "trojan", 150))
+	if added {
+		t.Fatal("重复名称的节点不应被添加")
+	}
+	if p.Size() != 1 {
+		t.Fatalf("大小应为 1, 实际 %d", p.Size())
+	}
+}
+
+func TestPoolRemove(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 100))
+	p.Add(newNode("node2", "trojan", 200))
+
+	removed := p.Remove("node1")
+	if !removed {
+		t.Fatal("移除 node1 应成功")
+	}
+	if p.Size() != 1 {
+		t.Fatalf("移除后大小应为 1, 实际 %d", p.Size())
+	}
+
+	removed = p.Remove("not_exist")
+	if removed {
+		t.Fatal("移除不存在的节点应返回 false")
+	}
+}
+
+func TestPoolGetRandom(t *testing.T) {
+	p := New(0)
+
+	// 空池返回 nil
+	if n := p.GetRandom(); n != nil {
+		t.Fatal("空池应返回 nil")
+	}
+
+	p.Add(newNode("node1", "trojan", 100))
+	n := p.GetRandom()
+	if n == nil {
+		t.Fatal("非空池应返回节点")
+	}
+	if n.Name != "node1" {
+		t.Fatalf("期望 node1, 实际 %s", n.Name)
+	}
+}
+
+func TestPoolAll(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 100))
+	p.Add(newNode("node2", "ss", 200))
+
+	all := p.All()
+	if len(all) != 2 {
+		t.Fatalf("期望 2 个节点, 实际 %d", len(all))
+	}
+
+	// 修改返回的副本不应影响原池
+	all[0].Name = "changed"
+	if p.All()[0].Name == "changed" {
+		t.Fatal("All() 应返回副本，修改不应影响原池")
+	}
+}
+
+func TestPoolMaxSize(t *testing.T) {
+	p := New(2)
+
+	p.Add(newNode("node1", "trojan", 100))
+	p.Add(newNode("node2", "trojan", 200))
+	added := p.Add(newNode("node3", "trojan", 300))
+
+	if added {
+		t.Fatal("超限时低延迟节点也应被限制")
+	}
+	if p.Size() != 2 {
+		t.Fatalf("大小应为 2, 实际 %d", p.Size())
+	}
+}
+
+func TestPoolAvgLatency(t *testing.T) {
+	p := New(0)
+
+	if avg := p.AvgLatency(); avg != 0 {
+		t.Fatalf("空池平均延迟应为 0, 实际 %f", avg)
+	}
+
+	p.Add(newNode("node1", "trojan", 100))
+	p.Add(newNode("node2", "trojan", 200))
+
+	avg := p.AvgLatency()
+	if avg != 150 {
+		t.Fatalf("平均延迟期望 150, 实际 %f", avg)
+	}
+}
+
+func TestPoolSortByLatency(t *testing.T) {
+	p := New(0)
+
+	p.Add(newNode("slow", "trojan", 300))
+	p.Add(newNode("fast", "trojan", 50))
+	p.Add(newNode("medium", "trojan", 150))
+
+	all := p.All()
+	if all[0].Name != "fast" {
+		t.Fatalf("第一个节点应为最快的(fast), 实际 %s", all[0].Name)
+	}
+	if all[1].Name != "medium" {
+		t.Fatalf("第二个节点应为 medium, 实际 %s", all[1].Name)
+	}
+	if all[2].Name != "slow" {
+		t.Fatalf("第三个节点应为 slow, 实际 %s", all[2].Name)
+	}
+}

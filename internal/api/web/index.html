@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>proxypool 管理控制台</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f6fa; color: #2d3436; }
+.container { max-width: 960px; margin: 0 auto; padding: 20px; }
+.header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.header h1 { font-size: 22px; font-weight: 600; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: #b2bec3; }
+.status-dot.running { background: #00b894; }
+.card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.card h2 { font-size: 15px; color: #636e72; margin-bottom: 12px; }
+.row { display: flex; gap: 16px; flex-wrap: wrap; }
+.stat { flex: 1; min-width: 100px; text-align: center; padding: 8px; }
+.stat-value { font-size: 28px; font-weight: 600; color: #2d3436; }
+.stat-label { font-size: 12px; color: #636e72; margin-top: 2px; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 10px 24px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; transition: .2s; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-primary { background: #0984e3; color: #fff; }
+.btn-primary:hover:not(:disabled) { background: #0767b0; }
+.btn-danger { background: #d63031; color: #fff; }
+.btn-danger:hover:not(:disabled) { background: #b71c1c; }
+.btn-success { background: #00b894; color: #fff; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: 12px; color: #636e72; }
+.form-group input { border: 1px solid #dfe6e9; border-radius: 4px; padding: 8px 10px; font-size: 13px; outline: none; }
+.form-group input:focus { border-color: #0984e3; }
+.log-area { background: #1e272e; color: #d2dae2; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; padding: 12px; border-radius: 6px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+.log-area .done { color: #00b894; }
+.log-area .err { color: #d63031; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #f1f2f6; }
+th { color: #636e72; font-weight: 500; }
+.status-tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+.status-tag.available { background: #d4edda; color: #155724; }
+.status-tag.unavailable { background: #f8d7da; color: #721c24; }
+.status-tag.untested { background: #e2e3e5; color: #383d41; }
+.hidden { display: none !important; }
+.action-bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="status-dot" id="statusDot"></div>
+    <h1>proxypool 管理控制台</h1>
+    <span id="statusText" style="color:#636e72;font-size:13px;">未启动</span>
+  </div>
+
+  <div class="card">
+    <h2>配置</h2>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Clash 配置文件路径</label>
+        <input id="confPath" value="clash.yaml">
+      </div>
+      <div class="form-group">
+        <label>代理端口</label>
+        <input id="port" type="number" value="1080">
+      </div>
+      <div class="form-group">
+        <label>谷歌测试超时 (ms)</label>
+        <input id="timeout" type="number" value="230">
+      </div>
+      <div class="form-group">
+        <label>健康检查间隔 (秒)</label>
+        <input id="healthInterval" type="number" value="60">
+      </div>
+      <div class="form-group">
+        <label>池最大节点数 (0=不限)</label>
+        <input id="poolMaxSize" type="number" value="0">
+      </div>
+      <div class="form-group">
+        <label>绑定地址</label>
+        <input id="bindAddress" value="127.0.0.1">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="action-bar">
+      <button class="btn btn-primary" id="btnStart" onclick="startProxy()">▶ 启动隧道代理</button>
+      <button class="btn btn-danger hidden" id="btnStop" onclick="stopProxy()">⏹ 停止</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="progressCard">
+    <h2>启动进度</h2>
+    <div class="log-area" id="progressLog"></div>
+  </div>
+
+  <div class="card">
+    <h2>代理池概况</h2>
+    <div class="row">
+      <div class="stat"><div class="stat-value" id="totalNodes">0</div><div class="stat-label">总节点</div></div>
+      <div class="stat"><div class="stat-value" id="availableNodes">0</div><div class="stat-label">可用</div></div>
+      <div class="stat"><div class="stat-value" id="avgLatency">-</div><div class="stat-label">平均延迟</div></div>
+      <div class="stat"><div class="stat-value" id="proxyRunning">-</div><div class="stat-label">运行状态</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>节点列表</h2>
+    <div id="nodeList"><p style="color:#b2bec3;font-size:13px;">启动代理后自动加载</p></div>
+  </div>
+</div>
+
+<script>
+const API = '';
+
+async function fetchJSON(url, opts) {
+  const r = await fetch(API + url, opts);
+  return r.json();
+}
+
+// 加载配置
+async function loadConfig() {
+  try {
+    const data = await fetchJSON('/api/config');
+    document.getElementById('confPath').value = data.CONF_PATH || 'clash.yaml';
+    document.getElementById('port').value = data.PORT || 1080;
+    document.getElementById('timeout').value = data.GOOGLE_TIMEOUT || 230;
+    document.getElementById('healthInterval').value = data.HEALTH_INTERVAL || 60;
+    document.getElementById('poolMaxSize').value = data.POOL_MAX_SIZE || 0;
+    document.getElementById('bindAddress').value = data.BIND_ADDRESS || '127.0.0.1';
+  } catch(e) {}
+}
+
+// 保存配置
+async function saveConfig() {
+  const data = {
+    CONF_PATH: document.getElementById('confPath').value,
+    PORT: parseInt(document.getElementById('port').value),
+    GOOGLE_TIMEOUT: parseInt(document.getElementById('timeout').value),
+    HEALTH_INTERVAL: parseInt(document.getElementById('healthInterval').value),
+    POOL_MAX_SIZE: parseInt(document.getElementById('poolMaxSize').value),
+    BIND_ADDRESS: document.getElementById('bindAddress').value,
+  };
+  await fetchJSON('/api/config', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data)
+  });
+}
+
+async function startProxy() {
+  await saveConfig();
+  document.getElementById('btnStart').disabled = true;
+  document.getElementById('progressCard').classList.remove('hidden');
+  document.getElementById('progressLog').textContent = '';
+
+  try {
+    const resp = await fetchJSON('/api/start', {method: 'POST'});
+    if (!resp.success) {
+      addLog('❌ ' + (resp.error || '启动失败'));
+      document.getElementById('btnStart').disabled = false;
+      return;
+    }
+  } catch(e) {
+    addLog('❌ 启动请求失败: ' + e.message);
+    document.getElementById('btnStart').disabled = false;
+    return;
+  }
+  addLog('正在启动...');
+  pollProgress();
+}
+
+async function stopProxy() {
+  document.getElementById('btnStop').classList.add('hidden');
+  try {
+    await fetchJSON('/api/stop', {method: 'POST'});
+    addLog('⏹ 代理已停止');
+  } catch(e) {
+    addLog('⏹ 停止请求已发送');
+  }
+  document.getElementById('btnStart').disabled = false;
+  updateStatus();
+}
+
+function addLog(msg) {
+  const el = document.getElementById('progressLog');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+async function pollProgress() {
+  const msgs = await fetchJSON('/api/progress');
+  for (const msg of msgs) {
+    if (msg === '__done__') {
+      updateStatus();
+      continue;
+    }
+    addLog(msg);
+  }
+
+  const st = await fetchJSON('/api/status');
+  if (st.running) {
+    setTimeout(pollProgress, 1000);
+  } else {
+    setTimeout(pollProgress, 500);
+  }
+}
+
+async function updateStatus() {
+  try {
+    const st = await fetchJSON('/api/status');
+    const dot = document.getElementById('statusDot');
+    const txt = document.getElementById('statusText');
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    if (st.running) {
+      dot.className = 'status-dot running';
+      txt.textContent = '运行中';
+      document.getElementById('proxyRunning').textContent = '运行中';
+      btnStart.disabled = true;
+      btnStop.classList.remove('hidden');
+    } else {
+      dot.className = 'status-dot';
+      txt.textContent = '未启动';
+      document.getElementById('proxyRunning').textContent = '已停止';
+      btnStart.disabled = false;
+      btnStop.classList.add('hidden');
+    }
+    document.getElementById('totalNodes').textContent = st.totalNodes || 0;
+    document.getElementById('availableNodes').textContent = st.availableNodes || 0;
+    document.getElementById('avgLatency').textContent = st.avgLatency ? st.avgLatency.toFixed(0) + 'ms' : '-';
+    await loadNodes();
+  } catch(e) {}
+}
+
+async function loadNodes() {
+  try {
+    const nodes = await fetchJSON('/api/nodes');
+    const container = document.getElementById('nodeList');
+    if (!nodes || nodes.length === 0) {
+      container.innerHTML = '<p style="color:#b2bec3;font-size:13px;">暂无节点数据</p>';
+      return;
+    }
+    let html = '<table><thead><tr><th>名称</th><th>类型</th><th>地址</th><th>延迟</th><th>状态</th></tr></thead><tbody>';
+    for (const n of nodes) {
+      html += `<tr>
+        <td>${esc(n.name)}</td>
+        <td>${esc(n.type)}</td>
+        <td>${esc(n.host)}:${n.port}</td>
+        <td>${n.latency > 0 ? n.latency + 'ms' : '-'}</td>
+        <td><span class="status-tag ${n.status}">${statusLabel(n.status)}</span></td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch(e) {}
+}
+
+function esc(s) { return String(s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'})[c]); }
+function statusLabel(s) {
+  if (s === 'available') return '可用';
+  if (s === 'unavailable') return '不可用';
+  return '待测试';
+}
+
+loadConfig();
+updateStatus();
+setInterval(updateStatus, 5000);
+</script>
+</body>
+</html>
