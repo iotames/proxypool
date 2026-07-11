@@ -8,7 +8,8 @@
 default.env
 
 # 配置文件
-*.yaml
+main/*.yaml
+main/*.yml
 
 # IDE
 .idea/

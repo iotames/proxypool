@@ -1,0 +1,95 @@
+# proxypool Release Build
+# 推送 v* 标签时自动构建多平台二进制并发布到 GitHub Releases
+name: Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  GO_VERSION: '1.25.x'
+
+jobs:
+  create_release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release via gh CLI
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes \
+            --draft=false \
+            --prerelease=false
+
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    needs: create_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: darwin
+            goarch: arm64
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Go proxies
+        run: |
+          go env -w GO111MODULE=on
+          go env -w GOPROXY=https://goproxy.cn,direct
+          go mod tidy
+
+      - name: Get Asset Name
+        id: get_filename
+        run: |
+          PKG_NAME="proxypool-${{ matrix.goos }}-${{ matrix.goarch }}"
+          echo "ASSET_NAME=$PKG_NAME" >> $GITHUB_OUTPUT
+          echo "ASSET_NAME=$PKG_NAME" >> $GITHUB_ENV
+
+      - name: Build Binary
+        run: |
+          mkdir -p release_assets
+          go build -v -o release_assets/proxypool -trimpath \
+            -ldflags "-s -w" \
+            ./main
+
+      - name: Rename for Windows
+        if: matrix.goos == 'windows'
+        run: mv release_assets/proxypool release_assets/proxypool.exe
+
+      - name: Package
+        run: |
+          PKG_DIR="${{ steps.get_filename.outputs.ASSET_NAME }}"
+          mkdir -p "${PKG_DIR}"
+          mv release_assets/* "${PKG_DIR}/"
+          cp README.md "${PKG_DIR}/"
+          tar czf "${PKG_DIR}.tar.gz" "${PKG_DIR}"
+
+      - name: Upload to GitHub Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: ./${{ env.ASSET_NAME }}.tar.gz
+          tag: ${{ github.ref }}
+          overwrite: true
