@@ -71,7 +71,7 @@ jobs:
         run: |
           mkdir -p release_assets
           go build -v -o release_assets/proxypool -trimpath \
-            -ldflags "-s -w" \
+            -ldflags "-s -w -X main.Version=${{ github.ref_name }} -X main.BuildTime=$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
             ./main
 
       - name: Rename for Windows

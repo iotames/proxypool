@@ -14,9 +14,15 @@
 //
 // 构建方式：
 //
-//	go build -o main/proxypool ./main/
+//	cd main && go build -o proxypool .
+//
+// 查看版本：
+//
+//	./proxypool --version
+//	./proxypool -version
 //
 // 命令行参数：
+//   --version       显示版本信息
 //   --port   int    代理服务监听端口（默认 1080）
 //   --conf  string Clash 配置文件路径（默认 clash.yaml）
 //
@@ -47,8 +53,25 @@ import (
 	"github.com/iotames/proxypool/internal/proxy"
 )
 
+// 构建时通过 -ldflags 注入，用于 --version 显示。
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GoVersion = runtime.Version()
+)
+
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	// 检查 --version / -version
+	if len(os.Args) > 0 {
+		arg := os.Args[1]
+		if arg == "--version" || arg == "-version" {
+			printVersion()
+			return
+		}
+	}
+
 	confDir := getConfDir()
 
 	// 无参数 → Web 控制台模式
@@ -58,6 +81,13 @@ func main() {
 	} else {
 		runCLIMode(confDir)
 	}
+}
+
+// printVersion 打印版本信息到标准输出并退出。
+func printVersion() {
+	fmt.Printf("Version: %s\n", Version)
+	fmt.Printf("BuildTime: %s\n", BuildTime)
+	fmt.Printf("GoVersion: %s\n", GoVersion)
 }
 
 // runWebMode 启动 Web 控制台模式。

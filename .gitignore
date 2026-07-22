@@ -30,3 +30,4 @@ easyconf/
 
 # 其他
 go.sum
+*.log
