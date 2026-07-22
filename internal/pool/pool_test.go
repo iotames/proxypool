@@ -132,6 +132,93 @@ func TestPoolAvgLatency(t *testing.T) {
 	}
 }
 
+func TestPoolGetFastestEmpty(t *testing.T) {
+	p := New(0)
+	if n := p.GetFastest(); n != nil {
+		t.Fatal("空池 GetFastest 应返回 nil")
+	}
+}
+
+func TestPoolGetFastestReturnsLowestLatency(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("slow", "trojan", 300))
+	p.Add(newNode("fast", "trojan", 50))
+	p.Add(newNode("medium", "trojan", 150))
+
+	fastest := p.GetFastest()
+	if fastest == nil {
+		t.Fatal("GetFastest 应返回节点")
+	}
+	if fastest.Name != "fast" {
+		t.Fatalf("期望最快节点为 fast, 实际 %s", fastest.Name)
+	}
+	if fastest.Latency != 50 {
+		t.Fatalf("期望延迟 50ms, 实际 %d", fastest.Latency)
+	}
+}
+
+func TestPoolGetFastestReturnsSameNodeOnRepeatedCalls(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 100))
+	p.Add(newNode("node2", "trojan", 200))
+
+	// 每次调用 GetFastest 应返回同一个对象
+	n1 := p.GetFastest()
+	n2 := p.GetFastest()
+	if n1 != n2 {
+		t.Fatal("多次调用 GetFastest 应返回同一个缓存对象")
+	}
+	if n1.Name != "node1" {
+		t.Fatalf("期望 node1, 实际 %s", n1.Name)
+	}
+}
+
+func TestPoolGetFastestUpdatesOnFasterNodeAdd(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("slow", "trojan", 200))
+	fastest := p.GetFastest()
+	if fastest.Name != "slow" {
+		t.Fatalf("初始期望 slow, 实际 %s", fastest.Name)
+	}
+
+	// 插入更快节点后 GetFastest 应更新
+	p.Add(newNode("fast", "trojan", 50))
+	newFastest := p.GetFastest()
+	if newFastest.Name != "fast" {
+		t.Fatalf("添加更快节点后期望 fast, 实际 %s", newFastest.Name)
+	}
+	if newFastest.Latency != 50 {
+		t.Fatalf("期望延迟 50ms, 实际 %d", newFastest.Latency)
+	}
+}
+
+func TestPoolAddUpdatesFixedWhenFasterNodeAdded(t *testing.T) {
+	// 覆盖 Add() 中 fixed != nil 且新节点更快时的更新分支（第 64-68 行）
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 200))
+	// 先触发 GetFastest，让 p.fixed 不为 nil
+	_ = p.GetFastest()
+	// 添加更快的节点，应触发 Add() 中的 fixed 更新逻辑
+	p.Add(newNode("faster", "trojan", 30))
+	fastest := p.GetFastest()
+	if fastest.Name != "faster" {
+		t.Fatalf("Add 后 fixed 应更新为 faster, 实际 %s", fastest.Name)
+	}
+}
+
+func TestPoolAddDoesNotUpdateFixedWhenSlowerNodeAdded(t *testing.T) {
+	// 覆盖 Add() 中 fixed 存在但新节点不更快时的分支（不进入第 66 行）
+	p := New(0)
+	p.Add(newNode("fast", "trojan", 50))
+	_ = p.GetFastest() // fixed 设为 fast
+
+	p.Add(newNode("slow", "trojan", 300))
+	fastest := p.GetFastest()
+	if fastest.Name != "fast" {
+		t.Fatalf("添加慢节点后 fixed 应保持 fast, 实际 %s", fastest.Name)
+	}
+}
+
 func TestPoolSortByLatency(t *testing.T) {
 	p := New(0)
 

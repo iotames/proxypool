@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/iotames/proxypool/internal/node"
-	"github.com/iotames/proxypool/internal/pool"
 )
 
 // handleCONNECT 处理 HTTP CONNECT 隧道请求。
@@ -25,7 +24,7 @@ import (
 //
 //	HTTP/1.1 200 Connection Established\r\n
 //	\r\n
-func handleCONNECT(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout int) {
+func handleCONNECT(clientConn net.Conn, initialBuf []byte, targetNode *node.Node, timeout int) {
 	// 从初始缓冲区读取完整的 CONNECT 请求
 	reader := bufio.NewReader(io.MultiReader(
 		strings.NewReader(string(initialBuf)),
@@ -62,14 +61,6 @@ func handleCONNECT(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout
 			}
 		}
 
-		// 从池中随机选取节点
-		targetNode := p.GetRandom()
-		if targetNode == nil {
-			log.Println("代理池为空，无法处理 CONNECT 请求")
-			sendHTTPError(clientConn, 503, "No Available Proxy")
-			return
-		}
-
 		// 通过节点连接到目标
 		remoteConn, err := node.DialThroughNode(targetNode, targetAddr, timeout)
 		if err != nil {
@@ -99,7 +90,7 @@ func handleCONNECT(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout
 //	GET http://host:port/path HTTP/1.1\r\n
 //	Host: host:port\r\n
 //	\r\n
-func handleHTTP(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout int) {
+func handleHTTP(clientConn net.Conn, initialBuf []byte, targetNode *node.Node, timeout int) {
 	reader := bufio.NewReader(io.MultiReader(
 		strings.NewReader(string(initialBuf)),
 		clientConn,
@@ -138,14 +129,6 @@ func handleHTTP(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout in
 		} else {
 			targetHost = net.JoinHostPort(targetHost, "80")
 		}
-	}
-
-	// 从池中选取节点
-	targetNode := p.GetRandom()
-	if targetNode == nil {
-		log.Println("代理池为空，无法处理 HTTP 请求")
-		sendHTTPError(clientConn, 503, "No Available Proxy")
-		return
 	}
 
 	// 通过节点连接到目标

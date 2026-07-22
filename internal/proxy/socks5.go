@@ -8,7 +8,6 @@ import (
 	"net"
 
 	"github.com/iotames/proxypool/internal/node"
-	"github.com/iotames/proxypool/internal/pool"
 )
 
 // SOCKS5 协议常量。
@@ -33,7 +32,7 @@ const (
 //  2. 请求: 客户端发送 [0x05][cmd][0x00][addrType][addr][port]
 //          服务器回复 [0x05][reply][0x00][addrType][addr][port]
 //  3. 数据传输
-func handleSOCKS5(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout int) {
+func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node, timeout int) {
 	reader := io.MultiReader(
 		bytesReader(initialBuf),
 		clientConn,
@@ -132,14 +131,6 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, p *pool.Pool, timeout 
 	}
 	targetPort := binary.BigEndian.Uint16(portBuf)
 	targetAddr := net.JoinHostPort(targetHost, fmt.Sprintf("%d", targetPort))
-
-	// 从池中选取节点
-	targetNode := p.GetRandom()
-	if targetNode == nil {
-		log.Println("代理池为空，无法处理 SOCKS5 请求")
-		clientConn.Write([]byte{socksVersion5, socksReplyUnreachable, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		return
-	}
 
 	// 通过节点连接到目标
 	remoteConn, err := node.DialThroughNode(targetNode, targetAddr, timeout)

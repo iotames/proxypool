@@ -1,6 +1,7 @@
 // Package proxy 实现隧道代理服务。
 // 支持 HTTP CONNECT、普通 HTTP 代理和 SOCKS5 三种协议的自动识别与转发。
-// 每个新连接都会从代理池中随机选取一个节点进行转发。
+// 默认每个新连接从代理池中随机选取一个节点进行转发。
+// 开启固定模式（Fixed）后，始终使用测速最快的同一个节点。
 package proxy
 
 import (
@@ -10,6 +11,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/iotames/proxypool/internal/node"
 	"github.com/iotames/proxypool/internal/pool"
 )
 
@@ -18,6 +20,7 @@ type Server struct {
 	address  string      // 监听地址，格式为 "host:port"
 	pool     *pool.Pool  // 代理池
 	timeout  int         // 连接超时（毫秒）
+	fixed    bool        // 固定模式：true=始终用最快节点，false=随机分配
 	listener net.Listener
 }
 
@@ -25,11 +28,13 @@ type Server struct {
 // addr: 监听地址，如 "127.0.0.1:1080"。
 // p: 代理池实例。
 // timeout: 节点连接超时（毫秒）。
-func NewServer(addr string, p *pool.Pool, timeout int) *Server {
+// fixed: 是否启用固定代理模式（始终使用测速最快的节点）。
+func NewServer(addr string, p *pool.Pool, timeout int, fixed bool) *Server {
 	return &Server{
 		address: addr,
 		pool:    p,
 		timeout: timeout,
+		fixed:   fixed,
 	}
 }
 
@@ -62,6 +67,16 @@ func (s *Server) Stop() {
 	}
 }
 
+// pickNode 从代理池中选取一个节点。
+// 固定模式下返回池中最快节点（所有连接共享同一个节点，保证出口 IP 固定）；
+// 普通模式下随机选取（每次连接可能不同节点，实现负载均衡）。
+func (s *Server) pickNode() *node.Node {
+	if s.fixed {
+		return s.pool.GetFastest()
+	}
+	return s.pool.GetRandom()
+}
+
 // handleConn 处理单个客户端连接。
 // 读取前几个字节自动识别协议类型，然后分发到对应的处理器。
 func (s *Server) handleConn(clientConn net.Conn) {
@@ -90,7 +105,7 @@ func (s *Server) handleConn(clientConn net.Conn) {
 	}
 
 	// 从池中选取一个节点
-	targetNode := s.pool.GetRandom()
+	targetNode := s.pickNode()
 	if targetNode == nil {
 		log.Println("代理池中没有可用节点")
 		return
@@ -106,18 +121,18 @@ func (s *Server) handleConn(clientConn net.Conn) {
 	case firstByte == 0x05:
 		// SOCKS5
 		log.Printf("[SOCKS5] 客户端连接，分配到节点: %s\n", targetNode.Name)
-		handleSOCKS5(clientConn, buf, s.pool, s.timeout)
+		handleSOCKS5(clientConn, buf, targetNode, s.timeout)
 
 	case first7 == "CONNECT":
 		// HTTP CONNECT
 		log.Printf("[CONNECT] 客户端连接，分配到节点: %s\n", targetNode.Name)
-		handleCONNECT(clientConn, buf, s.pool, s.timeout)
+		handleCONNECT(clientConn, buf, targetNode, s.timeout)
 
 	case first3 == "GET" || first4 == "POST" || first3 == "PUT" ||
 		first4 == "HEAD" || first4 == "PATC" || first3 == "DEL":
 		// 其他 HTTP 方法
 		log.Printf("[HTTP] 客户端连接，分配到节点: %s\n", targetNode.Name)
-		handleHTTP(clientConn, buf, s.pool, s.timeout)
+		handleHTTP(clientConn, buf, targetNode, s.timeout)
 
 	default:
 		log.Printf("无法识别的协议: %x\n", header[:n])

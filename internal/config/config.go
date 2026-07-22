@@ -22,6 +22,7 @@ import (
 type Conf struct {
 	Port           int    // 代理服务监听端口（命令行参数 --port）
 	ConfPath       string // Clash 配置文件路径（命令行参数 --conf）
+	Fixed          bool   // 固定代理模式（命令行参数 --fixed），启用后始终使用测速最快的节点，不随机分配，不自动测速
 	GoogleTimeout  int    // 谷歌连通性测试超时（毫秒）
 	TestURL        string // 连通性测试目标 URL
 	HealthInterval int    // 健康检查间隔（秒）
@@ -64,6 +65,7 @@ func Load(confDir string, parseFlags bool) (*Conf, error) {
 	// 命令行参数（同时也是 env 配置项）
 	cf.IntVar(&c.Port, "port", 1080, "代理服务监听端口")
 	cf.StringVar(&c.ConfPath, "conf", "clash.yaml", "Clash 配置文件路径")
+	cf.BoolVar(&c.Fixed, "fixed", false, "固定代理模式(仅CLI)", "启用后始终使用测速最快的节点，不随机分配，不自动测速（仅命令行模式有效）")
 
 	// 环境变量配置项
 	cf.IntVar(&c.GoogleTimeout, "GOOGLE_TIMEOUT", 230, "谷歌连通性测试超时(毫秒)", "节点延迟阈值，超过此值的节点将被剔除")

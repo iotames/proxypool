@@ -121,6 +121,15 @@ func runCLIMode(confDir string) {
 
 	cfg.PrintConfig()
 
+	// 固定代理模式提示
+	if cfg.Fixed {
+		log.Println("========================================")
+		log.Println("固定代理模式已启用（--fixed）")
+		log.Println("  特点：只取测速最快的节点，不随机分配，不出国IP不变")
+		log.Println("  注意：不会自动重新测速（忽略 HEALTH_INTERVAL 参数）")
+		log.Println("========================================")
+	}
+
 	// 解析 Clash 配置文件
 	if !filepath.IsAbs(cfg.ConfPath) {
 		cfg.ConfPath = filepath.Join(confDir, cfg.ConfPath)
@@ -140,7 +149,6 @@ func runCLIMode(confDir string) {
 	results := node.TestNodes(allNodes, cfg.GoogleTimeout)
 
 	proxyPool := pool.New(cfg.PoolMaxSize)
-	healthChecker := health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout)
 
 	availableCount := 0
 	for _, result := range results {
@@ -149,7 +157,6 @@ func runCLIMode(confDir string) {
 			availableCount++
 			log.Printf("节点(%s) 可用，延迟: %dms\n", result.Node.Name, result.Latency)
 		} else {
-			healthChecker.AddUnavailable(result.Node)
 			log.Printf("节点(%s) 不可用: %v\n", result.Node.Name, result.Err)
 		}
 	}
@@ -158,17 +165,34 @@ func runCLIMode(confDir string) {
 	}
 	log.Printf("代理池构建完成: 可用 %d / 总数 %d\n", availableCount, len(allNodes))
 
+	// 固定模式：取最快节点后打印提示
+	if cfg.Fixed {
+		fastest := proxyPool.GetFastest()
+		log.Printf("固定节点已选定: %s（延迟 %dms）\n", fastest.Name, fastest.Latency)
+	}
+
 	// 启动代理服务
 	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout)
+	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed)
 	go func() {
 		if err := proxyServer.Start(); err != nil {
 			log.Fatalf("代理服务启动失败: %v\n", err)
 		}
 	}()
 
-	// 启动健康检查
-	go healthChecker.Start()
+	// 启动健康检查（固定模式下不启动，因为只测速一次，后续不再自动测速）
+	if !cfg.Fixed {
+		healthChecker := health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout)
+		// 将不可用节点加入健康检查待恢复列表，等待后续自动恢复
+		for _, result := range results {
+			if result.Status != "available" {
+				healthChecker.AddUnavailable(result.Node)
+			}
+		}
+		go healthChecker.Start()
+	} else {
+		log.Println("固定模式：跳过健康检查（HEALTH_INTERVAL 已忽略）")
+	}
 
 	// 启动 API 服务
 	apiAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port+1)
@@ -185,6 +209,11 @@ func runCLIMode(confDir string) {
 	log.Printf("  代理地址: http://%s", proxyAddr)
 	log.Printf("  API 地址: http://%s", apiAddr)
 	log.Printf("  代理池节点: %d", proxyPool.Size())
+	if cfg.Fixed {
+		log.Printf("  模式: 固定代理（节点: %s）", proxyPool.GetFastest().Name)
+	} else {
+		log.Printf("  模式: 随机分配")
+	}
 	log.Println("  按 Ctrl+C 停止服务")
 	log.Println("========================================")
 
@@ -193,7 +222,6 @@ func runCLIMode(confDir string) {
 	sig := <-quit
 	log.Printf("收到退出信号: %v，正在停止服务...\n", sig)
 
-	healthChecker.Stop()
 	proxyServer.Stop()
 	_ = apiServer.Stop()
 	log.Println("proxypool 已停止")

@@ -73,7 +73,7 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 
 	// 启动代理服务
 	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, p, cfg.GoogleTimeout)
+	proxyServer := proxy.NewServer(proxyAddr, p, cfg.GoogleTimeout, false)
 
 	select {
 	case <-stopCh:
