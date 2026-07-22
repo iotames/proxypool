@@ -2,6 +2,21 @@
 
 从 Clash 配置中提取代理节点，自动构建代理池，在本地暴露一个固定端口作为隧道代理，随机分配出口 IP，规避反爬虫策略。
 
+## 编译
+
+```bash
+go mod tidy
+
+# 构建
+cd main
+
+# For Linux,Mac
+go build -o proxypool .
+
+# For Windows
+go build -o proxypool.exe .
+```
+
 ## 两种运行模式
 
 ### 命令行模式（CLI）
@@ -11,7 +26,6 @@
 ```bash
 # 构建
 cd main
-go build -o proxypool.exe .
 
 # 运行
 proxypool.exe --port=1080 --conf=clash.yaml
@@ -24,10 +38,6 @@ proxypool.exe --port=1080 --conf=clash.yaml
 不带任何参数启动，打开浏览器操作：
 
 ```bash
-# 构建
-cd main
-go build -o proxypool.exe .
-
 # 运行（Web 控制台）
 proxypool.exe
 ```

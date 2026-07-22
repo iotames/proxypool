@@ -71,6 +71,8 @@ func runWebMode(confDir string) {
 	proxyPool := pool.New(0)
 	apiAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port+1)
 
+	cfg.PrintConfig()
+
 	log.Println("========================================")
 	log.Println("proxypool Web 控制台模式")
 	log.Printf("  管理地址: http://%s", apiAddr)
@@ -116,6 +118,8 @@ func runCLIMode(confDir string) {
 
 	log.Printf("配置加载完成: 端口=%d, 配置文件=%s, 超时=%dms\n",
 		cfg.Port, cfg.ConfPath, cfg.GoogleTimeout)
+
+	cfg.PrintConfig()
 
 	// 解析 Clash 配置文件
 	if !filepath.IsAbs(cfg.ConfPath) {

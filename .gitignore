@@ -2,6 +2,8 @@
 *.exe
 *.exe~
 *.out
+/main/main
+/main/proxypool
 
 # 运行时生成的环境配置文件（由 easyconf 自动创建）
 .env
@@ -18,6 +20,8 @@ main/*.yml
 .reasonix/
 
 # 依赖包
+
+vendor/
 easyconf/
 
 # 临时文件

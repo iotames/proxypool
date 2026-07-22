@@ -12,6 +12,9 @@
 package config
 
 import (
+	"fmt"
+	"log"
+
 	"github.com/iotames/easyconf"
 )
 
@@ -27,6 +30,25 @@ type Conf struct {
 
 	// 内部引用，用于保存配置到 .env 文件
 	cf *easyconf.Conf
+}
+
+// PrintConfig 以表格形式打印当前配置项。
+func (c *Conf) PrintConfig() {
+	if c.cf == nil {
+		log.Println("配置未加载")
+		return
+	}
+	log.Println("----------------------------------------")
+	log.Println(fmt.Sprintf("%-20s %-30s %-40s", "配置项", "配置值", "配置说明"))
+	log.Println(fmt.Sprintf("%-20s %-30s %-40s", "--------", "--------", "--------"))
+	for _, item := range c.cf.GetItems() {
+		title := item.Title
+		if len(item.Usage) > 0 {
+			title = item.Usage[0]
+		}
+		log.Println(fmt.Sprintf("%-20s %-30s %-40s", item.Name, item.GetValue(), title))
+	}
+	log.Println("----------------------------------------")
 }
 
 // Load 加载配置，返回填充好的 Conf 实例。

@@ -3,7 +3,7 @@ module github.com/iotames/proxypool
 go 1.25.0
 
 require (
-	github.com/iotames/easyconf v1.2.2
+	github.com/iotames/easyconf v1.2.6
 	golang.org/x/crypto v0.54.0
 	gopkg.in/yaml.v3 v3.0.1
 )

@@ -20,6 +20,11 @@
 ## 构建命令
 
 ```bash
-# cd main && go build -o proxypool .
-cd main && go build -o proxypool.exe .
+cd main
+
+# For Linux,Mac
+go build -o proxypool .
+
+# For Windows
+go build -o proxypool.exe .
 ```
