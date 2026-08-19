@@ -19,6 +19,16 @@
 
 ## 构建命令
 
+推荐使用 `make`（Windows 需安装 Git for Windows，Makefile 会自动定位其 bash；`make build` 自动识别平台并注入版本号与构建时间）：
+
+```bash
+make build    # 构建（输出 proxypool 或 proxypool.exe）
+make run      # 构建并启动
+make clean    # 清理产物
+```
+
+也可直接用 go 命令：
+
 ```bash
 cd main
 

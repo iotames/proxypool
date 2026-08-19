@@ -4,9 +4,24 @@
 
 ## 编译
 
+推荐使用 `make`（Windows 需安装 [Git for Windows](https://git-scm.com/downloads)，Makefile 会自动定位其 bash）：
+
 ```bash
 go mod tidy
 
+# 构建（自动识别平台，输出 proxypool 或 proxypool.exe）
+make build
+
+# 构建并启动
+make run
+
+# 清理产物
+make clean
+```
+
+也可直接用 go 命令构建：
+
+```bash
 # 构建
 cd main
 
@@ -30,6 +45,11 @@ cd main
 # 运行
 proxypool.exe --port=1080 --conf=clash.yaml
 ```
+
+也可直接执行快速启动脚本（需先 `make build`）：
+
+- Windows：`main/run.bat`
+- Linux/Mac：`sh main/run.sh`（或先 `chmod +x main/run.sh` 后直接执行）
 
 启动后 `http://127.0.0.1:1080` 即为隧道代理入口，爬虫直接使用此地址即可随机切换出口 IP。
 
