@@ -27,7 +27,7 @@ build:
 	@echo "==> 目标平台: $(GOOS), 产物: $(APP_NAME)$(EXE)"
 	@echo "==> 构建信息: version=$(VERSION) build_time=$(BUILD_TIME)"
 	@echo "==> 开始编译 $(APP_NAME) ..."
-	@cd main && time go build -v -ldflags "$(LD_FLAGS)" -o $(APP_NAME)$(EXE) .
+	@cd main && go build -v -ldflags "$(LD_FLAGS)" -o $(APP_NAME)$(EXE) .
 	@echo "==> 编译完成: main/$(APP_NAME)$(EXE)"
 
 run: build

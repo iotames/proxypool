@@ -104,15 +104,15 @@ func (p *Pool) GetRandom() *node.Node {
 // 用于固定代理模式（--fixed 参数），每次调用都返回同一个最快节点，
 // 确保所有网络请求始终通过同一个最优代理出口。
 func (p *Pool) GetFastest() *node.Node {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
+	// 固定节点快照（p.fixed）的懒初始化涉及“写”，故整体使用写锁
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	if len(p.nodes) == 0 {
 		return nil
 	}
-
 	// 首次调用时，将 nodes[0]（当前最快节点）克隆并缓存
-	// 后续所有请求都返回这个缓存副本，保证一致性
+	// 后续所有请求都返回这个缓存副本，保证固定出口 IP 一致
 	if p.fixed == nil {
 		p.fixed = p.nodes[0].Clone()
 	}

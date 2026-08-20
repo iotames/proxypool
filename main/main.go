@@ -63,8 +63,8 @@ var (
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	// 检查 --version / -version
-	if len(os.Args) > 0 {
+	// 检查 --version / -version（需保证 os.Args[1] 存在，即确实传了参数）
+	if len(os.Args) > 1 {
 		arg := os.Args[1]
 		if arg == "--version" || arg == "-version" {
 			printVersion()
