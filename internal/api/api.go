@@ -5,12 +5,16 @@ package api
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 
 	"github.com/iotames/proxypool/internal/config"
+	"github.com/iotames/proxypool/internal/health"
+	"github.com/iotames/proxypool/internal/node"
 	"github.com/iotames/proxypool/internal/pool"
 	"github.com/iotames/proxypool/internal/proxy"
 )
@@ -23,11 +27,17 @@ type Server struct {
 	cfg        *config.Conf
 	pool       *pool.Pool
 	server     *http.Server
-	proxy      *proxy.Server
 	mu         sync.Mutex
 	running    bool
+	starting   bool // 启动流程进行中（测速/监听阶段）
+	runID      int  // 启动批次号，用于识别并丢弃被停止操作取代的启动结果
+	checking   bool // 手动巡检进行中
 	stopCh     chan struct{}
 	progressCh chan string
+	proxy      *proxy.Server   // 当前代理服务实例（运行中时持有，停止时可释放端口）
+	health     *health.Checker // 当前健康检查器（停止时一并停止）
+	nodesMu    sync.RWMutex
+	allNodes   []*node.Node // 全部已解析节点（含不可用节点），用于列表与统计
 }
 
 // NewServer 创建 Web API 服务器。
@@ -38,9 +48,36 @@ func NewServer(cfg *config.Conf, p *pool.Pool) *Server {
 	}
 }
 
+// SetAllNodes 设置全部已解析节点（含不可用节点）。
+func (s *Server) SetAllNodes(nodes []*node.Node) {
+	s.nodesMu.Lock()
+	defer s.nodesMu.Unlock()
+	s.allNodes = nodes
+}
+
+// allNodesSnapshot 返回全部节点的副本，避免与测速过程并发读写。
+func (s *Server) allNodesSnapshot() []*node.Node {
+	s.nodesMu.RLock()
+	defer s.nodesMu.RUnlock()
+
+	result := make([]*node.Node, len(s.allNodes))
+	for i, n := range s.allNodes {
+		result[i] = n.Clone()
+	}
+	return result
+}
+
 // SetProxy 设置代理服务器引用（CLI 模式用）。
 func (s *Server) SetProxy(p *proxy.Server) {
 	s.proxy = p
+}
+
+// SetHealth 设置健康检查器引用（CLI 模式用）。
+// 手动巡检判定为不可用的节点需加入该检查器的待恢复列表，才能被后台重新测活。
+func (s *Server) SetHealth(h *health.Checker) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.health = h
 }
 
 // Start 在指定地址启动 HTTP API 服务。
@@ -52,6 +89,7 @@ func (s *Server) Start(addr string, isCLI bool) error {
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/nodes", s.handleNodes)
+	mux.HandleFunc("/api/health/check", s.handleHealthCheck)
 
 	// Web 控制台模式才有的端点
 	if !isCLI {
@@ -68,7 +106,9 @@ func (s *Server) Start(addr string, isCLI bool) error {
 	s.server = &http.Server{Addr: addr, Handler: mux}
 
 	if isCLI {
+		s.mu.Lock()
 		s.running = true
+		s.mu.Unlock()
 	}
 
 	log.Printf("Web 管理界面已启动: http://%s\n", addr)
@@ -98,45 +138,104 @@ func (s *Server) OnProxyStarted() {
 }
 
 // startProxy 启动代理（Web 模式用）。
+// 幂等：已运行或正在启动时重复调用不产生新动作。
 func (s *Server) startProxy(confDir string) error {
 	s.mu.Lock()
-	if s.running {
+	if s.running || s.starting {
 		s.mu.Unlock()
 		return nil
 	}
-	s.mu.Unlock()
-
+	s.starting = true
+	s.runID++
+	runID := s.runID
 	progressCh := make(chan string, 100)
 	s.progressCh = progressCh
-	s.stopCh = make(chan struct{})
+	stopCh := make(chan struct{})
+	s.stopCh = stopCh
+	s.mu.Unlock()
 
 	// 在 goroutine 中异步执行初始化
 	go func() {
 		defer close(progressCh)
-		err := runProxy(confDir, s.cfg, s.pool, progressCh, s.stopCh)
-		if err != nil {
-			log.Printf("代理启动失败: %v\n", err)
+		result, err := runProxy(confDir, s.cfg, s.pool, progressCh, stopCh)
+
+		s.mu.Lock()
+		if s.runID != runID {
+			// 本次启动已被停止操作取代，释放可能已创建的服务与检查器
+			s.mu.Unlock()
+			releaseRunResult(result)
 			return
 		}
-		s.mu.Lock()
-		s.running = true
+		s.starting = false
+
+		var nodes []*node.Node
+		if result != nil {
+			nodes = result.Nodes
+		}
+
+		switch {
+		case errors.Is(err, ErrStartCancelled):
+			log.Println("代理启动已取消")
+		case err != nil:
+			log.Printf("代理启动失败: %v\n", err)
+		default:
+			s.running = true
+			s.proxy = result.Proxy
+			s.health = result.Health
+		}
 		s.mu.Unlock()
+
+		// 测速后记录全量节点，无论启动是否成功，前端都能看到真实状态
+		s.SetAllNodes(nodes)
 	}()
 
 	return nil
 }
 
-// stopProxy 停止代理（Web 模式用）。
-func (s *Server) stopProxy() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.running {
+// releaseRunResult 释放在启动被取消后仍可能创建的服务与检查器。
+func releaseRunResult(result *RunResult) {
+	if result == nil {
 		return
 	}
+	if result.Proxy != nil {
+		result.Proxy.Stop()
+	}
+	if result.Health != nil {
+		result.Health.Stop()
+	}
+}
+
+// stopProxy 停止代理（Web 模式用）。
+// 幂等：重复调用无副作用；会真正关闭代理监听并停止健康检查。
+func (s *Server) stopProxy() {
+	s.mu.Lock()
+	if !s.running && !s.starting {
+		s.mu.Unlock()
+		return
+	}
+	// 使正在进行的启动结果失效，避免其随后把状态改回运行中
+	s.runID++
+	s.starting = false
+	s.running = false
 	if s.stopCh != nil {
 		close(s.stopCh)
+		s.stopCh = nil
 	}
-	s.running = false
+	proxyServer := s.proxy
+	s.proxy = nil
+	healthChecker := s.health
+	s.health = nil
+	s.mu.Unlock()
+
+	if proxyServer != nil {
+		proxyServer.Stop()
+	}
+	if healthChecker != nil {
+		healthChecker.Stop()
+	}
+	// 清空池，避免停止后概况仍显示旧的可用节点
+	s.pool.Clear()
+	log.Println("代理已停止，端口已释放")
 }
 
 // handleStatus 返回代理池状态。
@@ -148,12 +247,23 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	running := s.running
+	starting := s.starting
 	s.mu.Unlock()
+
+	allNodes := s.allNodesSnapshot()
+	totalNodes := len(allNodes)
+	availableNodes := s.pool.AvailableCount()
+	if totalNodes == 0 {
+		// 尚未启动代理时退回代理池数量
+		totalNodes = s.pool.Size()
+		availableNodes = totalNodes
+	}
 
 	status := map[string]interface{}{
 		"running":        running,
-		"totalNodes":     s.pool.Size(),
-		"availableNodes": s.pool.AvailableCount(),
+		"starting":       starting,
+		"totalNodes":     totalNodes,
+		"availableNodes": availableNodes,
 		"avgLatency":     s.pool.AvgLatency(),
 	}
 	s.jsonResponse(w, status)
@@ -188,6 +298,86 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	s.jsonResponse(w, map[string]interface{}{"success": true})
 }
 
+// handleHealthCheck 手动触发一次全量巡检：重测所有节点、更新节点状态并重排代理池。
+// 仅在代理运行中可用；同一时间只允许一个巡检任务。
+func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		s.jsonResponse(w, map[string]interface{}{"success": false, "error": "代理未运行，无法巡检"})
+		return
+	}
+	if s.starting {
+		s.mu.Unlock()
+		s.jsonResponse(w, map[string]interface{}{"success": false, "error": "启动进行中，请稍后再试"})
+		return
+	}
+	if s.checking {
+		s.mu.Unlock()
+		s.jsonResponse(w, map[string]interface{}{"success": false, "error": "巡检进行中，请稍后再试"})
+		return
+	}
+	s.checking = true
+	runID := s.runID
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.checking = false
+		s.mu.Unlock()
+	}()
+
+	// 持有 nodesMu 直到测速结束，避免节点状态被并发读取时出现数据竞争
+	s.nodesMu.Lock()
+	nodes := make([]*node.Node, len(s.allNodes))
+	copy(nodes, s.allNodes)
+	total, available := health.RecheckAll(s.pool, nodes, s.cfg.GoogleTimeout)
+	s.nodesMu.Unlock()
+
+	// 巡检期间可能已被停止或重新启动，丢弃本次结果并清空池
+	s.mu.Lock()
+	runChanged := s.runID != runID
+	checker := s.health
+	s.mu.Unlock()
+	if runChanged {
+		s.pool.Clear()
+		s.jsonResponse(w, map[string]interface{}{"success": false, "error": "代理已停止或重启，巡检结果已丢弃"})
+		return
+	}
+
+	// 将巡检新判定为不可用的节点补充进后台恢复列表。
+	// 后台健康检查只重测该列表内的节点，遗漏会导致节点永久移出代理池。
+	if checker != nil {
+		for _, n := range nodes {
+			if n.Status != "available" {
+				checker.AddUnavailable(n)
+			}
+		}
+	}
+
+	// 固定/快速模式：原固定节点仍可用则保持不变；已失效则切换到当前最快节点
+	if name := s.pool.PinnedName(); name != "" {
+		if s.pool.GetByName(name) != nil {
+			s.pool.PinFastest(name)
+		} else {
+			s.pool.ReselectFastest()
+		}
+	}
+
+	log.Printf("手动巡检完成：可用节点 %d / %d\n", available, total)
+	s.jsonResponse(w, map[string]interface{}{
+		"success":    true,
+		"total":      total,
+		"available":  available,
+		"avgLatency": s.pool.AvgLatency(),
+	})
+}
+
 // handleProgress 返回启动进度（短轮询）。
 func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -196,18 +386,27 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	messages := make([]string, 0)
-	if s.progressCh != nil {
+	s.mu.Lock()
+	ch := s.progressCh
+	s.mu.Unlock()
+
+	if ch != nil {
+	drain:
 		for {
 			select {
-			case msg, ok := <-s.progressCh:
+			case msg, ok := <-ch:
 				if !ok {
 					messages = append(messages, "__done__")
-					s.progressCh = nil
-					break
+					s.mu.Lock()
+					if s.progressCh == ch {
+						s.progressCh = nil
+					}
+					s.mu.Unlock()
+					break drain
 				}
 				messages = append(messages, msg)
 			default:
-				break
+				break drain
 			}
 		}
 	}
@@ -276,13 +475,31 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNodes 获取节点列表。
+// 返回全部已解析节点（含不可用节点），status 由测试结果决定：
+// 延迟超过 GOOGLE_TIMEOUT 的节点状态为 unavailable，不计入可用池。
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	nodes := s.pool.All()
+	nodes := s.allNodesSnapshot()
+	if len(nodes) == 0 {
+		// 尚未启动代理时退回代理池中的节点
+		nodes = s.pool.All()
+	}
+	// 延迟升序排列，未测或延迟未知的节点排在最后
+	sort.SliceStable(nodes, func(i, j int) bool {
+		li, lj := nodes[i].Latency, nodes[j].Latency
+		if li < 0 {
+			return false
+		}
+		if lj < 0 {
+			return true
+		}
+		return li < lj
+	})
+
 	nodeList := make([]map[string]interface{}, 0, len(nodes))
 	for _, n := range nodes {
 		nodeList = append(nodeList, map[string]interface{}{

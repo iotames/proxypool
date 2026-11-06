@@ -4,6 +4,7 @@ package health
 
 import (
 	"log"
+	"sync"
 	"time"
 
 	"github.com/iotames/proxypool/internal/node"
@@ -12,11 +13,13 @@ import (
 
 // Checker 健康检查器，定期重试不可用节点。
 type Checker struct {
-	pool         *pool.Pool      // 代理池
-	unavailable  map[string]*node.Node // 不可用的节点列表
-	interval     int             // 检查间隔（秒）
-	timeout      int             // 测试超时（毫秒）
-	stopCh       chan struct{}
+	pool        *pool.Pool            // 代理池
+	unavailable map[string]*node.Node // 不可用的节点列表
+	interval    int                   // 检查间隔（秒）
+	timeout     int                   // 测试超时（毫秒）
+	mu          sync.Mutex            // 保护 unavailable
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 // NewChecker 创建一个新的健康检查器。
@@ -38,7 +41,9 @@ func (c *Checker) AddUnavailable(n *node.Node) {
 	if n == nil {
 		return
 	}
+	c.mu.Lock()
 	c.unavailable[n.Name] = n.Clone()
+	c.mu.Unlock()
 	log.Printf("节点(%s)已加入健康检查待恢复列表\n", n.Name)
 }
 
@@ -60,29 +65,35 @@ func (c *Checker) Start() {
 	}
 }
 
-// Stop 停止健康检查。
+// Stop 停止健康检查。可重复调用。
 func (c *Checker) Stop() {
-	close(c.stopCh)
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
 }
 
 // check 执行一次健康检查，重试所有不可用节点。
 func (c *Checker) check() {
+	c.mu.Lock()
 	if len(c.unavailable) == 0 {
+		c.mu.Unlock()
 		return
 	}
-
-	log.Printf("开始健康检查，待恢复节点数: %d\n", len(c.unavailable))
-
-	var nodes []*node.Node
+	nodes := make([]*node.Node, 0, len(c.unavailable))
 	for _, n := range c.unavailable {
 		nodes = append(nodes, n)
 	}
+	c.mu.Unlock()
+
+	log.Printf("开始健康检查，待恢复节点数: %d\n", len(nodes))
 
 	results := node.TestNodes(nodes, c.timeout)
 	for _, result := range results {
 		if result.Status == "available" {
 			if c.pool.Add(result.Node) {
+				c.mu.Lock()
 				delete(c.unavailable, result.Node.Name)
+				c.mu.Unlock()
 				log.Printf("节点(%s)已恢复，延迟: %dms\n", result.Node.Name, result.Latency)
 			}
 		} else {

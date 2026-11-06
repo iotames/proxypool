@@ -71,7 +71,7 @@ th { color: #636e72; font-weight: 500; }
       </div>
       <div class="form-group">
         <label>谷歌测试超时 (ms)</label>
-        <input id="timeout" type="number" value="230">
+        <input id="timeout" type="number" value="300">
       </div>
       <div class="form-group">
         <label>健康检查间隔 (秒)</label>
@@ -95,6 +95,7 @@ th { color: #636e72; font-weight: 500; }
     <div class="action-bar">
       <button class="btn btn-primary" id="btnStart" onclick="startProxy()">▶ 启动隧道代理</button>
       <button class="btn btn-danger hidden" id="btnStop" onclick="stopProxy()">⏹ 停止</button>
+      <button class="btn hidden" id="btnCheck" onclick="checkNow()">🔄 立即巡检</button>
     </div>
   </div>
 
@@ -134,7 +135,7 @@ async function loadConfig() {
     const data = await fetchJSON('/api/config');
     document.getElementById('confPath').value = data.CONF_PATH || 'clash.yaml';
     document.getElementById('port').value = data.PORT || 1080;
-    document.getElementById('timeout').value = data.GOOGLE_TIMEOUT || 230;
+    document.getElementById('timeout').value = data.GOOGLE_TIMEOUT || 300;
     document.getElementById('healthInterval').value = data.HEALTH_INTERVAL || 60;
     document.getElementById('poolMaxSize').value = data.POOL_MAX_SIZE || 0;
     document.getElementById('bindAddress').value = data.BIND_ADDRESS || '127.0.0.1';
@@ -227,6 +228,30 @@ async function stopProxy() {
   updateStatus();
 }
 
+// 手动触发一次全量巡检，重测所有节点并重排代理池
+async function checkNow() {
+  const btn = document.getElementById('btnCheck');
+  btn.disabled = true;
+  btn.textContent = '⏳ 巡检中...';
+  try {
+    const resp = await fetchJSON('/api/health/check', {method: 'POST'});
+    if (!resp.success) {
+      showToast('⚠️ ' + (resp.error || '巡检失败'), 'warning');
+      addLog('⚠️ ' + (resp.error || '巡检失败'));
+    } else {
+      const msg = `✅ 巡检完成：可用 ${resp.available}/${resp.total}，平均 ${Math.round(resp.avgLatency || 0)}ms`;
+      showToast(msg, 'success');
+      addLog(msg);
+    }
+  } catch(e) {
+    showToast('❌ 巡检请求失败: ' + e.message, 'error');
+    addLog('❌ 巡检请求失败: ' + e.message);
+  }
+  btn.disabled = false;
+  btn.textContent = '🔄 立即巡检';
+  updateStatus();
+}
+
 function addLog(msg) {
   const el = document.getElementById('progressLog');
   el.textContent += msg + '\n';
@@ -258,18 +283,28 @@ async function updateStatus() {
     const txt = document.getElementById('statusText');
     const btnStart = document.getElementById('btnStart');
     const btnStop = document.getElementById('btnStop');
-    if (st.running) {
+    const btnCheck = document.getElementById('btnCheck');
+    if (st.starting) {
+      dot.className = 'status-dot';
+      txt.textContent = '启动中...';
+      document.getElementById('proxyRunning').textContent = '启动中';
+      btnStart.disabled = true;
+      btnStop.classList.remove('hidden');
+      btnCheck.classList.add('hidden');
+    } else if (st.running) {
       dot.className = 'status-dot running';
       txt.textContent = '运行中';
       document.getElementById('proxyRunning').textContent = '运行中';
       btnStart.disabled = true;
       btnStop.classList.remove('hidden');
+      btnCheck.classList.remove('hidden');
     } else {
       dot.className = 'status-dot';
       txt.textContent = '未启动';
       document.getElementById('proxyRunning').textContent = '已停止';
       btnStart.disabled = false;
       btnStop.classList.add('hidden');
+      btnCheck.classList.add('hidden');
     }
     document.getElementById('totalNodes').textContent = st.totalNodes || 0;
     document.getElementById('availableNodes').textContent = st.availableNodes || 0;

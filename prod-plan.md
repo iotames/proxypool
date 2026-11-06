@@ -11,7 +11,7 @@ proxypool 是一个面向爬虫开发者的轻量级隧道代理工具。它从 
 
 > 读取clash的 .yaml 配置文件，运行多个代理节点组成代理池，但只暴露一个端口作为隧道代理，随机切换网络请求的IP。如：http://127.0.0.1:1080  
 > 1. 目的：给爬虫应用使用防止被反爬虫，执行命令 `proxypool --port=1080 --conf=xxx.yml` 开启服务。  
-> 2. 选择可用节点：测试谷歌首页的访问速度，默认延迟230以内的作为可用节点，组成代理池。  
+> 2. 选择可用节点：测试谷歌首页的访问速度，默认延迟300以内的作为可用节点，组成代理池。  
 > 3. 使用说明：把详细的注释和使用说明都写到源码文件中。  
 > 4. 先规划后执行：优先使用交互式对话，用户确认需求后执行。  
 > 5. 自行请求测试网页，验证不同请求的客户的IP是否随机变化，自己完善产品。
@@ -68,7 +68,7 @@ proxypool 采用 **Go 单体服务 + 内嵌 Web 前端** 的架构，核心模�
 
 ### 5.2 节点可用性测试与代理池构建
 - 启动时并发测试所有节点的可用性，通过节点请求 `https://www.google.com`，记录延迟。
-- 默认延迟阈值 230ms（可通过配置调整），延迟 ≤ 该值的节点加入代理池。
+- 默认延迟阈值 300ms（可通过配置调整），延迟 ≤ 该值的节点加入代理池。
 - 代理池内节点按延迟升序排列，支持通过 `POOL_MAX_SIZE` 限制最大保留数量。
 
 ### 5.3 隧道代理服务
@@ -94,7 +94,7 @@ proxypool 自身运行配置独立于 Clash，通过以下三级机制加载，�
 
 | 配置项 | 环境变量 | 默认值 | 说明 |
 |--------|----------|--------|------|
-| Google 测试超时 | `GOOGLE_TIMEOUT` | 230 (ms) | 节点延迟筛选阈值 |
+| Google 测试超时 | `GOOGLE_TIMEOUT` | 300 (ms) | 节点延迟筛选阈值 |
 | 测试目标 URL | `GOOGLE_TEST_URL` | `https://www.google.com` | 用于连通性测试 |
 | 健康检查间隔 | `HEALTH_INTERVAL` | 60 (s) | 剔除节点后重测间隔 |
 | 池最大节点数 | `POOL_MAX_SIZE` | 0 (不限制) | 代理池容量上限 |
@@ -143,11 +143,12 @@ proxypool 自身运行配置独立于 Clash，通过以下三级机制加载，�
 
 | 方法 | 路径 | 说明 | 返回示例 |
 |------|------|------|----------|
-| GET | `/api/status` | 代理池总览 | `{ running, totalNodes, availableNodes, avgLatency, recentLogs[] }` |
-| GET | `/api/config` | 当前 .env 配置 | `{ GOOGLE_TIMEOUT: 230, ... }` |
+| GET | `/api/status` | 代理池总览 | `{ running, starting, totalNodes, availableNodes, avgLatency, recentLogs[] }` |
+| GET | `/api/config` | 当前 .env 配置 | `{ GOOGLE_TIMEOUT: 300, ... }` |
 | PUT | `/api/config` | 更新 .env 配置 | `{ success: true }` |
 | GET | `/api/nodes` | 节点列表（含状态） | `[ { name, type, host, port, latency, status } ]` |
 | POST | `/api/nodes/{name}/test` | 测试单个节点 | `{ name, latency, status }` |
+| POST | `/api/health/check` | 手动全量巡检并重排代理池（仅运行中可用） | `{ success, total, available, avgLatency }` |
 | GET | `/api/logs` | 最近请求日志 | `[ { time, target, node, latency } ]` |
 
 所有接口均遵循 RESTful 风格，返回 JSON。

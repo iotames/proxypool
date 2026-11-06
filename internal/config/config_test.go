@@ -22,8 +22,8 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 	if cfg.ConfPath != "clash.yaml" {
 		t.Errorf("默认配置路径期望 'clash.yaml', 实际 '%s'", cfg.ConfPath)
 	}
-	if cfg.GoogleTimeout != 230 {
-		t.Errorf("默认超时期望 230, 实际 %d", cfg.GoogleTimeout)
+	if cfg.GoogleTimeout != 300 {
+		t.Errorf("默认超时期望 300, 实际 %d", cfg.GoogleTimeout)
 	}
 	if cfg.TestURL != "https://www.google.com" {
 		t.Errorf("默认测试URL期望 'https://www.google.com', 实际 '%s'", cfg.TestURL)

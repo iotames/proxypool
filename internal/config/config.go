@@ -23,6 +23,7 @@ type Conf struct {
 	Port           int    // 代理服务监听端口（命令行参数 --port）
 	ConfPath       string // Clash 配置文件路径（命令行参数 --conf）
 	Fixed          bool   // 固定代理模式（命令行参数 --fixed），启用后始终使用测速最快的节点，不随机分配，不自动测速
+	Fast           bool   // 快速模式（命令行参数 --fast），固定使用最快节点，但按 HEALTH_INTERVAL 重测并在节点失效时自动切换
 	GoogleTimeout  int    // 谷歌连通性测试超时（毫秒）
 	TestURL        string // 连通性测试目标 URL
 	HealthInterval int    // 健康检查间隔（秒）
@@ -66,9 +67,10 @@ func Load(confDir string, parseFlags bool) (*Conf, error) {
 	cf.IntVar(&c.Port, "port", 1080, "代理服务监听端口")
 	cf.StringVar(&c.ConfPath, "conf", "clash.yaml", "Clash 配置文件路径")
 	cf.BoolVar(&c.Fixed, "fixed", false, "固定代理模式(仅CLI)", "启用后始终使用测速最快的节点，不随机分配，不自动测速（仅命令行模式有效）")
+	cf.BoolVar(&c.Fast, "fast", false, "快速模式(仅CLI)", "固定使用测速最快的节点，但按 HEALTH_INTERVAL 重测，节点掉出可用池时自动切换到最快节点（仅命令行模式有效）")
 
 	// 环境变量配置项
-	cf.IntVar(&c.GoogleTimeout, "GOOGLE_TIMEOUT", 230, "谷歌连通性测试超时(毫秒)", "节点延迟阈值，超过此值的节点将被剔除")
+	cf.IntVar(&c.GoogleTimeout, "GOOGLE_TIMEOUT", 300, "谷歌连通性测试超时(毫秒)", "节点延迟阈值，超过此值的节点将被剔除")
 	cf.StringVar(&c.TestURL, "GOOGLE_TEST_URL", "https://www.google.com", "连通性测试目标URL")
 	cf.IntVar(&c.HealthInterval, "HEALTH_INTERVAL", 60, "健康检查间隔(秒)", "剔除节点后重测的时间间隔")
 	cf.IntVar(&c.PoolMaxSize, "POOL_MAX_SIZE", 0, "代理池最大节点数", "0 表示不限制")

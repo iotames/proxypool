@@ -219,6 +219,106 @@ func TestPoolAddDoesNotUpdateFixedWhenSlowerNodeAdded(t *testing.T) {
 	}
 }
 
+func TestPoolGetByName(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("node1", "trojan", 100))
+
+	if n := p.GetByName("node1"); n == nil || n.Name != "node1" {
+		t.Fatalf("GetByName 应返回 node1, 实际 %v", n)
+	}
+	if n := p.GetByName("not_exist"); n != nil {
+		t.Fatal("GetByName 不存在的节点应返回 nil")
+	}
+}
+
+func TestPoolReselectFastestUsesUpdatedLatency(t *testing.T) {
+	p := New(0)
+	slow := newNode("slow", "trojan", 100)
+	fast := newNode("fast", "trojan", 300)
+	p.Add(slow)
+	p.Add(fast)
+
+	// 初始最快为 slow
+	_ = p.GetFastest()
+
+	// 模拟定时重测后延迟反转（池内节点指针被就地更新）
+	slow.Latency = 500
+	fast.Latency = 80
+
+	fastest := p.ReselectFastest()
+	if fastest == nil || fastest.Name != "fast" {
+		t.Fatalf("重新选定后应为 fast, 实际 %v", fastest)
+	}
+	if fastest.Latency != 80 {
+		t.Fatalf("期望延迟 80ms, 实际 %d", fastest.Latency)
+	}
+}
+
+func TestPoolReselectFastestEmpty(t *testing.T) {
+	p := New(0)
+	if n := p.ReselectFastest(); n != nil {
+		t.Fatal("空池重新选定应返回 nil")
+	}
+}
+
+func TestPoolPinFastestKeepsGivenNode(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("fast", "trojan", 50))
+	p.Add(newNode("slow", "trojan", 200))
+
+	// 即使 slow 不是最快节点，也应能钉住它
+	pinned := p.PinFastest("slow")
+	if pinned == nil || pinned.Name != "slow" {
+		t.Fatalf("应钉住 slow, 实际 %v", pinned)
+	}
+	if n := p.GetFastest(); n == nil || n.Name != "slow" {
+		t.Fatalf("GetFastest 应返回钉住的 slow, 实际 %v", n)
+	}
+	if n := p.PinFastest("not_exist"); n != nil {
+		t.Fatal("钉住不存在的节点应返回 nil")
+	}
+}
+
+func TestPoolReorderByCurrentLatency(t *testing.T) {
+	p := New(0)
+	a := newNode("a", "trojan", 100)
+	b := newNode("b", "trojan", 300)
+	p.Add(a)
+	p.Add(b)
+
+	// 模拟巡检后就地更新延迟
+	a.Latency = 500
+	b.Latency = 80
+	p.Reorder()
+
+	all := p.All()
+	if all[0].Name != "b" || all[1].Name != "a" {
+		t.Fatalf("重排后顺序应为 b,a，实际 %s,%s", all[0].Name, all[1].Name)
+	}
+}
+
+func TestPoolPinnedNameAndClear(t *testing.T) {
+	p := New(0)
+	p.Add(newNode("fast", "trojan", 50))
+	p.Add(newNode("slow", "trojan", 200))
+
+	if name := p.PinnedName(); name != "" {
+		t.Fatalf("未钉住节点时应返回空字符串，实际 %q", name)
+	}
+	p.PinFastest("slow")
+	if name := p.PinnedName(); name != "slow" {
+		t.Fatalf("钉住后应返回 slow，实际 %q", name)
+	}
+
+	p.Clear()
+	if p.Size() != 0 {
+		t.Fatalf("清空后池大小应为 0，实际 %d", p.Size())
+	}
+	if name := p.PinnedName(); name != "" {
+		t.Fatalf("清空后固定节点应被移除，实际 %q", name)
+	}
+}
+
 func TestPoolSortByLatency(t *testing.T) {
 	p := New(0)
 

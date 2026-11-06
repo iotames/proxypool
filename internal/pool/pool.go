@@ -18,8 +18,8 @@ import (
 type Pool struct {
 	mu    sync.RWMutex
 	nodes []*node.Node
-	max   int          // 最大节点数，0 表示不限制
-	fixed *node.Node   // 固定模式下的选中节点（索引 0 的克隆副本）
+	max   int        // 最大节点数，0 表示不限制
+	fixed *node.Node // 固定模式下的选中节点（索引 0 的克隆副本）
 }
 
 // New 创建一个新的代理池。
@@ -117,6 +117,80 @@ func (p *Pool) GetFastest() *node.Node {
 		p.fixed = p.nodes[0].Clone()
 	}
 	return p.fixed
+}
+
+// GetByName 返回池中指定名称节点的副本，不存在时返回 nil。
+func (p *Pool) GetByName(name string) *node.Node {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for _, n := range p.nodes {
+		if n.Name == name {
+			return n.Clone()
+		}
+	}
+	return nil
+}
+
+// ReselectFastest 按最新延迟重新排序，并重新选定池中最快节点作为固定节点。
+// 池为空时清空固定节点并返回 nil。用于快速模式下的故障切换。
+func (p *Pool) ReselectFastest() *node.Node {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.nodes) == 0 {
+		p.fixed = nil
+		return nil
+	}
+	// 节点延迟会在定时重测中被就地更新，重新选定前需重排
+	sort.Slice(p.nodes, func(i, j int) bool {
+		return p.nodes[i].Latency < p.nodes[j].Latency
+	})
+	p.fixed = p.nodes[0].Clone()
+	return p.fixed
+}
+
+// PinFastest 将指定名称的节点设为固定节点（以池中最新的延迟值为准）。
+// 节点不存在时返回 nil。用于快速模式下原固定节点仍可用时保持出口 IP 不变。
+func (p *Pool) PinFastest(name string) *node.Node {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, n := range p.nodes {
+		if n.Name == name {
+			p.fixed = n.Clone()
+			return p.fixed
+		}
+	}
+	return nil
+}
+
+// Reorder 按节点当前延迟重新升序排序。
+// 健康检查会就地更新节点延迟，重排后 nodes[0] 为最新最快节点。
+func (p *Pool) Reorder() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	sort.Slice(p.nodes, func(i, j int) bool {
+		return p.nodes[i].Latency < p.nodes[j].Latency
+	})
+}
+
+// PinnedName 返回当前固定节点名称；未钉住任何节点时返回空字符串。
+func (p *Pool) PinnedName() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.fixed == nil {
+		return ""
+	}
+	return p.fixed.Name
+}
+
+// Clear 清空代理池与固定节点。
+func (p *Pool) Clear() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nodes = make([]*node.Node, 0)
+	p.fixed = nil
 }
 
 // Size 返回池中节点数量。

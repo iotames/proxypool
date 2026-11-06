@@ -22,15 +22,19 @@
 //	./proxypool -version
 //
 // 命令行参数：
-//   --version       显示版本信息
-//   --port   int    代理服务监听端口（默认 1080）
-//   --conf  string Clash 配置文件路径（默认 clash.yaml）
+//
+//	--version       显示版本信息
+//	--port   int    代理服务监听端口（默认 1080）
+//	--conf  string Clash 配置文件路径（默认 clash.yaml）
+//	--fixed         固定代理模式：始终使用测速最快的节点，不自动重测
+//	--fast          快速模式：固定使用最快节点，但按 HEALTH_INTERVAL 重测，节点失效自动切换
 //
 // 配置项（.env 文件 / 环境变量）：
-//   GOOGLE_TIMEOUT    int    谷歌连通性测试超时/毫秒（默认 230）
-//   HEALTH_INTERVAL   int    健康检查间隔/秒（默认 60）
-//   POOL_MAX_SIZE     int    代理池最大节点数（默认 0=不限制）
-//   BIND_ADDRESS      string 代理服务绑定 IP（默认 127.0.0.1）
+//
+//	GOOGLE_TIMEOUT    int    谷歌连通性测试超时/毫秒，同时作为节点延迟阈值（默认 300）
+//		HEALTH_INTERVAL   int    健康检查间隔/秒（默认 60）
+//		POOL_MAX_SIZE     int    代理池最大节点数（默认 0=不限制）
+//		BIND_ADDRESS      string 代理服务绑定 IP（默认 127.0.0.1）
 package main
 
 import (
@@ -146,17 +150,28 @@ func runCLIMode(confDir string) {
 		log.Fatalf("加载配置失败: %v\n", err)
 	}
 
+	if cfg.Fixed && cfg.Fast {
+		log.Fatalln("参数 --fixed 与 --fast 不能同时使用")
+	}
+
 	log.Printf("配置加载完成: 端口=%d, 配置文件=%s, 超时=%dms\n",
 		cfg.Port, cfg.ConfPath, cfg.GoogleTimeout)
 
 	cfg.PrintConfig()
 
-	// 固定代理模式提示
+	// 固定/快速代理模式提示
 	if cfg.Fixed {
 		log.Println("========================================")
 		log.Println("固定代理模式已启用（--fixed）")
-		log.Println("  特点：只取测速最快的节点，不随机分配，不出国IP不变")
+		log.Println("  特点：只取测速最快的节点，不随机分配，出口 IP 不变")
 		log.Println("  注意：不会自动重新测速（忽略 HEALTH_INTERVAL 参数）")
+		log.Println("========================================")
+	} else if cfg.Fast {
+		log.Println("========================================")
+		log.Println("快速模式已启用（--fast）")
+		log.Println("  特点：固定使用测速最快的节点，出口 IP 稳定")
+		log.Printf("  监控：每 %d 秒重测一次，节点失效/掉出可用池时自动切换到最快节点\n",
+			cfg.HealthInterval)
 		log.Println("========================================")
 	}
 
@@ -195,24 +210,32 @@ func runCLIMode(confDir string) {
 	}
 	log.Printf("代理池构建完成: 可用 %d / 总数 %d\n", availableCount, len(allNodes))
 
-	// 固定模式：取最快节点后打印提示
-	if cfg.Fixed {
+	// 固定/快速模式：先钉住当前最快的节点并打印提示
+	if cfg.Fixed || cfg.Fast {
 		fastest := proxyPool.GetFastest()
 		log.Printf("固定节点已选定: %s（延迟 %dms）\n", fastest.Name, fastest.Latency)
 	}
 
 	// 启动代理服务
 	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed)
+	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed || cfg.Fast)
 	go func() {
 		if err := proxyServer.Start(); err != nil {
 			log.Fatalf("代理服务启动失败: %v\n", err)
 		}
 	}()
 
-	// 启动健康检查（固定模式下不启动，因为只测速一次，后续不再自动测速）
-	if !cfg.Fixed {
-		healthChecker := health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout)
+	// 启动健康检查
+	var healthChecker *health.Checker // 随机模式的检查器；传给 API 以便手动巡检同步恢复列表
+	switch {
+	case cfg.Fixed:
+		log.Println("固定模式：跳过健康检查（HEALTH_INTERVAL 已忽略）")
+	case cfg.Fast:
+		// 快速模式：定时全量重测，原节点可用则保持，失效时切换到最快节点
+		fastChecker := health.NewFastChecker(proxyPool, allNodes, cfg.HealthInterval, cfg.GoogleTimeout)
+		go fastChecker.Start()
+	default:
+		healthChecker = health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout)
 		// 将不可用节点加入健康检查待恢复列表，等待后续自动恢复
 		for _, result := range results {
 			if result.Status != "available" {
@@ -220,14 +243,16 @@ func runCLIMode(confDir string) {
 			}
 		}
 		go healthChecker.Start()
-	} else {
-		log.Println("固定模式：跳过健康检查（HEALTH_INTERVAL 已忽略）")
 	}
 
 	// 启动 API 服务
 	apiAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port+1)
 	apiServer := api.NewServer(cfg, proxyPool)
 	apiServer.SetProxy(proxyServer)
+	apiServer.SetAllNodes(allNodes)
+	if healthChecker != nil {
+		apiServer.SetHealth(healthChecker)
+	}
 	go func() {
 		if err := apiServer.Start(apiAddr, true); err != nil {
 			log.Printf("API 服务已停止: %v\n", err)
@@ -241,6 +266,8 @@ func runCLIMode(confDir string) {
 	log.Printf("  代理池节点: %d", proxyPool.Size())
 	if cfg.Fixed {
 		log.Printf("  模式: 固定代理（节点: %s）", proxyPool.GetFastest().Name)
+	} else if cfg.Fast {
+		log.Printf("  模式: 快速模式（当前节点: %s，失效自动切换）", proxyPool.GetFastest().Name)
 	} else {
 		log.Printf("  模式: 随机分配")
 	}

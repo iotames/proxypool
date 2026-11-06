@@ -1,7 +1,7 @@
 // Package proxy 实现隧道代理服务。
 // 支持 HTTP CONNECT、普通 HTTP 代理和 SOCKS5 三种协议的自动识别与转发。
 // 默认每个新连接从代理池中随机选取一个节点进行转发。
-// 开启固定模式（Fixed）后，始终使用测速最快的同一个节点。
+// 固定模式（Fixed）或快速模式（Fast）下，始终使用代理池中钉住的最快节点。
 package proxy
 
 import (
@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/iotames/proxypool/internal/node"
@@ -17,36 +18,41 @@ import (
 
 // Server 隧道代理服务器。
 type Server struct {
-	address  string      // 监听地址，格式为 "host:port"
-	pool     *pool.Pool  // 代理池
-	timeout  int         // 连接超时（毫秒）
-	fixed    bool        // 固定模式：true=始终用最快节点，false=随机分配
-	listener net.Listener
+	address    string     // 监听地址，格式为 "host:port"
+	pool       *pool.Pool // 代理池
+	timeout    int        // 连接超时（毫秒）
+	pinFastest bool       // 钉住最快节点：固定模式恒为 true；快速模式由检查器在节点失效时切换
+	listener   net.Listener
+	stopOnce   sync.Once
 }
 
 // NewServer 创建一个新的代理服务器实例。
 // addr: 监听地址，如 "127.0.0.1:1080"。
 // p: 代理池实例。
 // timeout: 节点连接超时（毫秒）。
-// fixed: 是否启用固定代理模式（始终使用测速最快的节点）。
-func NewServer(addr string, p *pool.Pool, timeout int, fixed bool) *Server {
+// pinFastest: 是否钉住代理池中的最快节点（固定模式、快速模式均为 true）。
+func NewServer(addr string, p *pool.Pool, timeout int, pinFastest bool) *Server {
 	return &Server{
-		address: addr,
-		pool:    p,
-		timeout: timeout,
-		fixed:   fixed,
+		address:    addr,
+		pool:       p,
+		timeout:    timeout,
+		pinFastest: pinFastest,
 	}
 }
 
-// Start 启动代理服务器，开始监听并处理客户端连接。
-func (s *Server) Start() error {
+// Listen 创建监听器。调用成功后端口即被占用，用于在启动阶段同步暴露端口冲突错误。
+func (s *Server) Listen() error {
 	var err error
 	s.listener, err = net.Listen("tcp", s.address)
 	if err != nil {
 		return fmt.Errorf("监听地址(%s)失败: %w", s.address, err)
 	}
-	// defer 不在此处, Stop() 负责关闭
+	return nil
+}
 
+// Serve 开始处理客户端连接，阻塞直到监听器关闭。
+// 调用前需先成功调用 Listen。
+func (s *Server) Serve() {
 	log.Printf("隧道代理服务已启动，监听地址: %s\n", s.address)
 
 	for {
@@ -57,21 +63,31 @@ func (s *Server) Start() error {
 		}
 		go s.handleConn(conn)
 	}
+}
+
+// Start 启动代理服务器，开始监听并处理客户端连接。
+func (s *Server) Start() error {
+	if err := s.Listen(); err != nil {
+		return err
+	}
+	s.Serve()
 	return nil
 }
 
-// Stop 停止代理服务器。
+// Stop 停止代理服务器。可重复调用。
 func (s *Server) Stop() {
-	if s.listener != nil {
-		s.listener.Close()
-	}
+	s.stopOnce.Do(func() {
+		if s.listener != nil {
+			s.listener.Close()
+		}
+	})
 }
 
 // pickNode 从代理池中选取一个节点。
-// 固定模式下返回池中最快节点（所有连接共享同一个节点，保证出口 IP 固定）；
+// 钉住最快节点时返回池中钉住的节点（所有连接共享同一个节点，保证出口 IP 固定）；
 // 普通模式下随机选取（每次连接可能不同节点，实现负载均衡）。
 func (s *Server) pickNode() *node.Node {
-	if s.fixed {
+	if s.pinFastest {
 		return s.pool.GetFastest()
 	}
 	return s.pool.GetRandom()

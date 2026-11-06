@@ -89,13 +89,31 @@ func ParseFile(filepath string) ([]*node.Node, error) {
 	return nodes, nil
 }
 
+// infoNodeKeywords 订阅中用于展示账户信息的伪节点关键词。
+// 这类条目与真实节点共用 server/port/password，并非可用的代理出口。
+var infoNodeKeywords = []string{"剩余流量", "距离下次重置", "套餐到期"}
+
+// isInfoNode 判断节点名是否为订阅信息伪节点。
+func isInfoNode(name string) bool {
+	for _, kw := range infoNodeKeywords {
+		if strings.Contains(name, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // proxyToNode 将 Clash proxy 条目转换为 Node。
-// 仅支持 trojan 和 ss 类型，其他类型返回 nil。
+// 仅支持 trojan 和 ss 类型，其他类型或订阅信息伪节点返回 nil。
 func proxyToNode(p clashProxy) *node.Node {
 	switch p.Type {
 	case "trojan", "ss":
 		// 有效类型
 	default:
+		return nil
+	}
+
+	if isInfoNode(p.Name) {
 		return nil
 	}
 
@@ -223,6 +241,10 @@ func parseTrojanURI(u *url.URL) (*node.Node, error) {
 	}
 	fmt.Sscanf(portStr, "%d", &n.Port)
 
+	if isInfoNode(n.Name) {
+		return nil, nil
+	}
+
 	q := u.Query()
 	if peer := q.Get("peer"); peer != "" {
 		n.SNI = peer
@@ -278,6 +300,10 @@ func parseSSURI(u *url.URL) (*node.Node, error) {
 		Latency:  -1,
 	}
 	fmt.Sscanf(portStr, "%d", &n.Port)
+
+	if isInfoNode(n.Name) {
+		return nil, nil
+	}
 
 	if n.Name == "" {
 		n.Name = fmt.Sprintf("ss-%s:%d", n.Server, n.Port)

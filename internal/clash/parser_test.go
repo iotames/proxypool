@@ -104,6 +104,15 @@ func TestProxyToNode(t *testing.T) {
 		t.Fatal("vmess 类型应返回 nil")
 	}
 
+	// 测试订阅信息伪节点被过滤（与真实节点同 server/port/password）
+	infoNames := []string{"剩余流量：9757.43 GB", "距离下次重置剩余：29 天", "套餐到期：2026-11-25"}
+	for _, name := range infoNames {
+		p := clashProxy{Name: name, Type: "trojan", Server: "h00kgaa1.aiganme.xyz", Port: 60010, Password: "pass"}
+		if n := proxyToNode(p); n != nil {
+			t.Fatalf("信息伪节点(%s)应返回 nil", name)
+		}
+	}
+
 	// 测试 ss 节点
 	p2 := clashProxy{
 		Name:     "ss节点",

@@ -19,8 +19,9 @@ type TestResult struct {
 }
 
 // TestNode 测试单个节点的连通性。
-// 通过节点隧道连接到测试目标，测量延迟。
-// timeout: 超时时间（毫秒）。
+// 通过节点隧道连接到测试目标，测量总延迟。
+// timeout: 超时时间（毫秒），同时也是节点延迟阈值：
+// 总延迟超过该值的节点视为不可用（Status=unavailable），不会被加入代理池。
 func TestNode(n *Node, timeout int) TestResult {
 	n.Status = "testing"
 	start := time.Now()
@@ -74,8 +75,18 @@ func TestNode(n *Node, timeout int) TestResult {
 	responseStr := string(buf[:])
 	if strings.Contains(responseStr, "HTTP/") {
 		latency := time.Since(start).Milliseconds()
-		n.Status = "available"
 		n.Latency = latency
+		// 总延迟超过阈值时视为不可用；保留实测延迟用于展示
+		if latency > int64(timeout) {
+			n.Status = "unavailable"
+			return TestResult{
+				Node:    n,
+				Latency: latency,
+				Status:  "unavailable",
+				Err:     fmt.Errorf("节点(%s)延迟 %dms 超过阈值 %dms", n.Name, latency, timeout),
+			}
+		}
+		n.Status = "available"
 		return TestResult{
 			Node:    n,
 			Latency: latency,
