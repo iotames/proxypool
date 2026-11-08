@@ -54,9 +54,9 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 	}
 
 	sendProgress(progressCh, "正在测试节点连通性...")
-	results := node.TestNodes(allNodes, cfg.GoogleTimeout)
+	results := node.TestNodes(allNodes, cfg.GoogleTimeout, cfg.LatencyMax)
 
-	healthChecker := health.NewChecker(p, cfg.HealthInterval, cfg.GoogleTimeout)
+	healthChecker := health.NewChecker(p, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
 
 	availableCount := 0
 	for _, result := range results {

@@ -191,7 +191,7 @@ func runCLIMode(confDir string) {
 
 	// 测试节点连通性
 	log.Println("正在测试节点连通性（请稍候）...")
-	results := node.TestNodes(allNodes, cfg.GoogleTimeout)
+	results := node.TestNodes(allNodes, cfg.GoogleTimeout, cfg.LatencyMax)
 
 	proxyPool := pool.New(cfg.PoolMaxSize)
 
@@ -213,7 +213,7 @@ func runCLIMode(confDir string) {
 	// 固定/快速模式：先钉住当前最快的节点并打印提示
 	if cfg.Fixed || cfg.Fast {
 		fastest := proxyPool.GetFastest()
-		log.Printf("固定节点已选定: %s（延迟 %dms）\n", fastest.Name, fastest.Latency)
+		log.Printf("固定节点已选定: %s（延迟 %dms）\n", fastest.Name, fastest.Latency())
 	}
 
 	// 启动代理服务
@@ -232,10 +232,10 @@ func runCLIMode(confDir string) {
 		log.Println("固定模式：跳过健康检查（HEALTH_INTERVAL 已忽略）")
 	case cfg.Fast:
 		// 快速模式：定时全量重测，原节点可用则保持，失效时切换到最快节点
-		fastChecker := health.NewFastChecker(proxyPool, allNodes, cfg.HealthInterval, cfg.GoogleTimeout)
+		fastChecker := health.NewFastChecker(proxyPool, allNodes, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
 		go fastChecker.Start()
 	default:
-		healthChecker = health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout)
+		healthChecker = health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
 		// 将不可用节点加入健康检查待恢复列表，等待后续自动恢复
 		for _, result := range results {
 			if result.Status != "available" {

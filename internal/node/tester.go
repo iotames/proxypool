@@ -20,18 +20,19 @@ type TestResult struct {
 
 // TestNode 测试单个节点的连通性。
 // 通过节点隧道连接到测试目标，测量总延迟。
-// timeout: 超时时间（毫秒），同时也是节点延迟阈值：
-// 总延迟超过该值的节点视为不可用（Status=unavailable），不会被加入代理池。
-func TestNode(n *Node, timeout int) TestResult {
-	n.Status = "testing"
+// timeout:   连接/读取超时（毫秒）。
+// latencyMax: 延迟上限（毫秒）。<=0 表示不按延迟淘汰（连通即视为可用，
+// 延迟仅用于排序展示）；>0 时总延迟超过该上限才判为不可用。
+// 说明：连通性与延迟阈值解耦——慢不等于不可用。
+func TestNode(n *Node, timeout, latencyMax int) TestResult {
+	n.SetStatus("testing")
 	start := time.Now()
 
 	// 通过代理节点连接到测试目标（使用 HTTP 端口 80，避免 TLS 握手）
 	targetAddr := "www.google.com:80"
 	conn, err := DialThroughNode(n, targetAddr, timeout)
 	if err != nil {
-		n.Status = "unavailable"
-		n.Latency = -1
+		n.SetState(-1, "unavailable")
 		return TestResult{
 			Node:    n,
 			Latency: -1,
@@ -47,8 +48,7 @@ func TestNode(n *Node, timeout int) TestResult {
 	// 发送简单的 HTTP GET 请求以验证连通性
 	reqStr := "GET / HTTP/1.1\r\nHost: www.google.com\r\nConnection: close\r\n\r\n"
 	if _, err := conn.Write([]byte(reqStr)); err != nil {
-		n.Status = "unavailable"
-		n.Latency = -1
+		n.SetState(-1, "unavailable")
 		return TestResult{
 			Node:    n,
 			Latency: -1,
@@ -61,8 +61,7 @@ func TestNode(n *Node, timeout int) TestResult {
 	buf := make([]byte, 256)
 	_, err = conn.Read(buf)
 	if err != nil {
-		n.Status = "unavailable"
-		n.Latency = -1
+		n.SetState(-1, "unavailable")
 		return TestResult{
 			Node:    n,
 			Latency: -1,
@@ -75,18 +74,17 @@ func TestNode(n *Node, timeout int) TestResult {
 	responseStr := string(buf[:])
 	if strings.Contains(responseStr, "HTTP/") {
 		latency := time.Since(start).Milliseconds()
-		n.Latency = latency
-		// 总延迟超过阈值时视为不可用；保留实测延迟用于展示
-		if latency > int64(timeout) {
-			n.Status = "unavailable"
+		// 连通成功：延迟达标（或未启用上限）即为可用；上限内保留实测延迟用于展示
+		if latencyMax > 0 && latency > int64(latencyMax) {
+			n.SetState(latency, "unavailable")
 			return TestResult{
 				Node:    n,
 				Latency: latency,
 				Status:  "unavailable",
-				Err:     fmt.Errorf("节点(%s)延迟 %dms 超过阈值 %dms", n.Name, latency, timeout),
+				Err:     fmt.Errorf("节点(%s)延迟 %dms 超过上限 %dms", n.Name, latency, latencyMax),
 			}
 		}
-		n.Status = "available"
+		n.SetState(latency, "available")
 		return TestResult{
 			Node:    n,
 			Latency: latency,
@@ -94,8 +92,7 @@ func TestNode(n *Node, timeout int) TestResult {
 		}
 	}
 
-	n.Status = "unavailable"
-	n.Latency = -1
+	n.SetState(-1, "unavailable")
 	return TestResult{
 		Node:    n,
 		Latency: -1,
@@ -105,15 +102,16 @@ func TestNode(n *Node, timeout int) TestResult {
 }
 
 // TestNodes 并发测试多个节点的连通性。
-// timeout: 每个节点的超时时间（毫秒）。
-func TestNodes(nodes []*Node, timeout int) []TestResult {
+// timeout: 每个节点的连接/读取超时（毫秒）。
+// latencyMax: 延迟上限（毫秒），<=0 表示不按延迟淘汰。
+func TestNodes(nodes []*Node, timeout, latencyMax int) []TestResult {
 	results := make([]TestResult, 0, len(nodes))
 	resultCh := make(chan TestResult, len(nodes))
 
 	for _, n := range nodes {
-		n.Status = "testing"
+		n.SetStatus("testing")
 		go func(node *Node) {
-			resultCh <- TestNode(node, timeout)
+			resultCh <- TestNode(node, timeout, latencyMax)
 		}(n)
 	}
 
@@ -132,6 +130,7 @@ func TestNodeConnect(n *Node, timeout int) TestResult {
 
 	conn, err := net.DialTimeout("tcp", n.Addr(), time.Duration(timeout)*time.Millisecond)
 	if err != nil {
+		n.SetState(-1, "unavailable")
 		return TestResult{
 			Node:    n,
 			Latency: -1,
@@ -142,8 +141,7 @@ func TestNodeConnect(n *Node, timeout int) TestResult {
 	conn.Close()
 
 	latency := time.Since(start).Milliseconds()
-	n.Latency = latency
-	n.Status = "available"
+	n.SetState(latency, "available")
 	return TestResult{
 		Node:    n,
 		Latency: latency,

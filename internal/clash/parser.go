@@ -117,7 +117,7 @@ func proxyToNode(p clashProxy) *node.Node {
 		return nil
 	}
 
-	return &node.Node{
+	n := &node.Node{
 		Name:           p.Name,
 		Type:           p.Type,
 		Server:         p.Server,
@@ -127,9 +127,9 @@ func proxyToNode(p clashProxy) *node.Node {
 		SNI:            p.SNI,
 		SkipCertVerify: p.SkipCertVerify,
 		UDP:            p.UDP,
-		Status:         "untested",
-		Latency:        -1,
 	}
+	n.SetState(-1, "untested")
+	return n
 }
 
 // parseProvider 拉取并解析远程 proxy-provider。
@@ -236,9 +236,8 @@ func parseTrojanURI(u *url.URL) (*node.Node, error) {
 		Type:     "trojan",
 		Server:   host,
 		Password: password,
-		Status:   "untested",
-		Latency:  -1,
 	}
+	n.SetState(-1, "untested")
 	fmt.Sscanf(portStr, "%d", &n.Port)
 
 	if isInfoNode(n.Name) {
@@ -296,9 +295,8 @@ func parseSSURI(u *url.URL) (*node.Node, error) {
 		Server:   host,
 		Password: password,
 		Cipher:   method,
-		Status:   "untested",
-		Latency:  -1,
 	}
+	n.SetState(-1, "untested")
 	fmt.Sscanf(portStr, "%d", &n.Port)
 
 	if isInfoNode(n.Name) {

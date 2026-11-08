@@ -7,14 +7,14 @@ import (
 )
 
 func newNode(name, ntype string, latency int64) *node.Node {
-	return &node.Node{
-		Name:    name,
-		Type:    ntype,
-		Server:  "test.com",
-		Port:    443,
-		Latency: latency,
-		Status:  "available",
+	n := &node.Node{
+		Name:   name,
+		Type:   ntype,
+		Server: "test.com",
+		Port:   443,
 	}
+	n.SetState(latency, "available")
+	return n
 }
 
 func TestPoolAddAndSize(t *testing.T) {
@@ -152,8 +152,8 @@ func TestPoolGetFastestReturnsLowestLatency(t *testing.T) {
 	if fastest.Name != "fast" {
 		t.Fatalf("期望最快节点为 fast, 实际 %s", fastest.Name)
 	}
-	if fastest.Latency != 50 {
-		t.Fatalf("期望延迟 50ms, 实际 %d", fastest.Latency)
+	if fastest.Latency() != 50 {
+		t.Fatalf("期望延迟 50ms, 实际 %d", fastest.Latency())
 	}
 }
 
@@ -187,8 +187,8 @@ func TestPoolGetFastestUpdatesOnFasterNodeAdd(t *testing.T) {
 	if newFastest.Name != "fast" {
 		t.Fatalf("添加更快节点后期望 fast, 实际 %s", newFastest.Name)
 	}
-	if newFastest.Latency != 50 {
-		t.Fatalf("期望延迟 50ms, 实际 %d", newFastest.Latency)
+	if newFastest.Latency() != 50 {
+		t.Fatalf("期望延迟 50ms, 实际 %d", newFastest.Latency())
 	}
 }
 
@@ -242,15 +242,15 @@ func TestPoolReselectFastestUsesUpdatedLatency(t *testing.T) {
 	_ = p.GetFastest()
 
 	// 模拟定时重测后延迟反转（池内节点指针被就地更新）
-	slow.Latency = 500
-	fast.Latency = 80
+	slow.SetState(500, slow.Status())
+	fast.SetState(80, fast.Status())
 
 	fastest := p.ReselectFastest()
 	if fastest == nil || fastest.Name != "fast" {
 		t.Fatalf("重新选定后应为 fast, 实际 %v", fastest)
 	}
-	if fastest.Latency != 80 {
-		t.Fatalf("期望延迟 80ms, 实际 %d", fastest.Latency)
+	if fastest.Latency() != 80 {
+		t.Fatalf("期望延迟 80ms, 实际 %d", fastest.Latency())
 	}
 }
 
@@ -287,8 +287,8 @@ func TestPoolReorderByCurrentLatency(t *testing.T) {
 	p.Add(b)
 
 	// 模拟巡检后就地更新延迟
-	a.Latency = 500
-	b.Latency = 80
+	a.SetState(500, a.Status())
+	b.SetState(80, b.Status())
 	p.Reorder()
 
 	all := p.All()

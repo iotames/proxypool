@@ -336,7 +336,7 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	s.nodesMu.Lock()
 	nodes := make([]*node.Node, len(s.allNodes))
 	copy(nodes, s.allNodes)
-	total, available := health.RecheckAll(s.pool, nodes, s.cfg.GoogleTimeout)
+	total, available := health.RecheckAll(s.pool, nodes, s.cfg.GoogleTimeout, s.cfg.LatencyMax)
 	s.nodesMu.Unlock()
 
 	// 巡检期间可能已被停止或重新启动，丢弃本次结果并清空池
@@ -354,7 +354,7 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	// 后台健康检查只重测该列表内的节点，遗漏会导致节点永久移出代理池。
 	if checker != nil {
 		for _, n := range nodes {
-			if n.Status != "available" {
+			if n.Status() != "available" {
 				checker.AddUnavailable(n)
 			}
 		}
@@ -490,7 +490,7 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	// 延迟升序排列，未测或延迟未知的节点排在最后
 	sort.SliceStable(nodes, func(i, j int) bool {
-		li, lj := nodes[i].Latency, nodes[j].Latency
+		li, lj := nodes[i].Latency(), nodes[j].Latency()
 		if li < 0 {
 			return false
 		}
@@ -507,8 +507,8 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			"type":    n.Type,
 			"host":    n.Server,
 			"port":    n.Port,
-			"latency": n.Latency,
-			"status":  n.Status,
+			"latency": n.Latency(),
+			"status":  n.Status(),
 		})
 	}
 	s.jsonResponse(w, nodeList)

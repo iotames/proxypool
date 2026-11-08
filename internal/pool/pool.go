@@ -48,7 +48,7 @@ func (p *Pool) Add(n *node.Node) bool {
 	// 检查最大容量
 	if p.max > 0 && len(p.nodes) >= p.max {
 		// 如果当前节点延迟高于池中最差节点，不添加
-		if n.Latency > p.nodes[len(p.nodes)-1].Latency {
+		if n.Latency() > p.nodes[len(p.nodes)-1].Latency() {
 			return false
 		}
 		// 移除最差节点
@@ -58,12 +58,12 @@ func (p *Pool) Add(n *node.Node) bool {
 	p.nodes = append(p.nodes, n)
 	// 按延迟升序排列，确保 nodes[0] 始终是最快节点
 	sort.Slice(p.nodes, func(i, j int) bool {
-		return p.nodes[i].Latency < p.nodes[j].Latency
+		return p.nodes[i].Latency() < p.nodes[j].Latency()
 	})
 
 	// 如果已为固定模式选中了节点，且新插入的节点比当前固定节点更快，
 	// 则自动更新固定节点，保证永远使用池中最快的那个节点
-	if p.fixed != nil && p.nodes[0].Latency < p.fixed.Latency {
+	if p.fixed != nil && p.nodes[0].Latency() < p.fixed.Latency() {
 		p.fixed = p.nodes[0].Clone()
 	}
 
@@ -144,7 +144,7 @@ func (p *Pool) ReselectFastest() *node.Node {
 	}
 	// 节点延迟会在定时重测中被就地更新，重新选定前需重排
 	sort.Slice(p.nodes, func(i, j int) bool {
-		return p.nodes[i].Latency < p.nodes[j].Latency
+		return p.nodes[i].Latency() < p.nodes[j].Latency()
 	})
 	p.fixed = p.nodes[0].Clone()
 	return p.fixed
@@ -171,7 +171,7 @@ func (p *Pool) Reorder() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	sort.Slice(p.nodes, func(i, j int) bool {
-		return p.nodes[i].Latency < p.nodes[j].Latency
+		return p.nodes[i].Latency() < p.nodes[j].Latency()
 	})
 }
 
@@ -224,7 +224,7 @@ func (p *Pool) AvgLatency() float64 {
 
 	var total int64
 	for _, n := range p.nodes {
-		total += n.Latency
+		total += n.Latency()
 	}
 	return float64(total) / float64(len(p.nodes))
 }

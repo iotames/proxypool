@@ -14,12 +14,13 @@ import (
 //   - 当前固定节点仍可用时保持不变，避免出口 IP 频繁跳动触发验证码；
 //   - 当前固定节点不可用（掉出可用池）时，自动切换到池中最快节点。
 type FastChecker struct {
-	pool     *pool.Pool   // 代理池
-	nodes    []*node.Node // 全部节点（含已被剔除的节点，用于恢复）
-	interval int          // 检查间隔（秒）
-	timeout  int          // 节点测试超时（毫秒）
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	pool       *pool.Pool   // 代理池
+	nodes      []*node.Node // 全部节点（含已被剔除的节点，用于恢复）
+	interval   int          // 检查间隔（秒）
+	timeout    int          // 节点测试超时（毫秒）
+	latencyMax int          // 节点延迟上限（毫秒）
+	stopCh     chan struct{}
+	stopOnce   sync.Once
 }
 
 // NewFastChecker 创建一个快速模式健康检查器。
@@ -27,13 +28,14 @@ type FastChecker struct {
 // nodes: 配置文件中的全部节点。
 // interval: 检查间隔（秒）。
 // timeout: 节点测试超时（毫秒），超过该值的节点视为掉出可用池。
-func NewFastChecker(p *pool.Pool, nodes []*node.Node, interval, timeout int) *FastChecker {
+func NewFastChecker(p *pool.Pool, nodes []*node.Node, interval, timeout, latencyMax int) *FastChecker {
 	return &FastChecker{
-		pool:     p,
-		nodes:    nodes,
-		interval: interval,
-		timeout:  timeout,
-		stopCh:   make(chan struct{}),
+		pool:       p,
+		nodes:      nodes,
+		interval:   interval,
+		timeout:    timeout,
+		latencyMax: latencyMax,
+		stopCh:     make(chan struct{}),
 	}
 }
 
@@ -70,7 +72,7 @@ func (c *FastChecker) check() {
 		currentName = current.Name
 	}
 
-	results := node.TestNodes(c.nodes, c.timeout)
+	results := node.TestNodes(c.nodes, c.timeout, c.latencyMax)
 	for _, result := range results {
 		if result.Status == "available" {
 			// 已在池中的节点延迟由共享指针就地更新；新恢复的节点则重新入池
@@ -83,7 +85,7 @@ func (c *FastChecker) check() {
 	// 原固定节点仍在可用池中：保持不变，稳定出口 IP
 	if currentName != "" && c.pool.GetByName(currentName) != nil {
 		if n := c.pool.PinFastest(currentName); n != nil {
-			log.Printf("快速模式：保持节点 %s（延迟 %dms）\n", n.Name, n.Latency)
+			log.Printf("快速模式：保持节点 %s（延迟 %dms）\n", n.Name, n.Latency())
 		}
 		return
 	}
@@ -94,9 +96,9 @@ func (c *FastChecker) check() {
 		return
 	}
 	if currentName == "" {
-		log.Printf("快速模式：选定最快节点 %s（延迟 %dms）\n", fastest.Name, fastest.Latency)
+		log.Printf("快速模式：选定最快节点 %s（延迟 %dms）\n", fastest.Name, fastest.Latency())
 	} else {
 		log.Printf("快速模式：节点 %s 已不可用，切换最快节点为 %s（延迟 %dms）\n",
-			currentName, fastest.Name, fastest.Latency)
+			currentName, fastest.Name, fastest.Latency())
 	}
 }

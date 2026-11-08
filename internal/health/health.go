@@ -17,6 +17,7 @@ type Checker struct {
 	unavailable map[string]*node.Node // 不可用的节点列表
 	interval    int                   // 检查间隔（秒）
 	timeout     int                   // 测试超时（毫秒）
+	latencyMax  int                   // 延迟上限（毫秒）
 	mu          sync.Mutex            // 保护 unavailable
 	stopCh      chan struct{}
 	stopOnce    sync.Once
@@ -26,12 +27,13 @@ type Checker struct {
 // p: 代理池，用于将恢复的节点重新加入。
 // interval: 检查间隔（秒）。
 // timeout: 节点测试超时（毫秒）。
-func NewChecker(p *pool.Pool, interval, timeout int) *Checker {
+func NewChecker(p *pool.Pool, interval, timeout, latencyMax int) *Checker {
 	return &Checker{
 		pool:        p,
 		unavailable: make(map[string]*node.Node),
 		interval:    interval,
 		timeout:     timeout,
+		latencyMax:  latencyMax,
 		stopCh:      make(chan struct{}),
 	}
 }
@@ -87,7 +89,7 @@ func (c *Checker) check() {
 
 	log.Printf("开始健康检查，待恢复节点数: %d\n", len(nodes))
 
-	results := node.TestNodes(nodes, c.timeout)
+	results := node.TestNodes(nodes, c.timeout, c.latencyMax)
 	for _, result := range results {
 		if result.Status == "available" {
 			if c.pool.Add(result.Node) {
