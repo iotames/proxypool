@@ -28,6 +28,9 @@ easyconf/
 *.tmp
 *.swp
 
+# 粘性会话绑定（运行时生成）
+main/sessions.json
+
 # 其他
 go.sum
 *.log

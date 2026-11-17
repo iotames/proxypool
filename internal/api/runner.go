@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 
 	"github.com/iotames/proxypool/internal/clash"
 	"github.com/iotames/proxypool/internal/config"
@@ -85,7 +86,9 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 
 	// 启动代理服务：先同步监听，端口占用等问题直接反馈给调用方
 	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, p, cfg.GoogleTimeout, false)
+	proxyServer := proxy.NewServer(proxyAddr, p, cfg.GoogleTimeout, false,
+		proxy.WithStickySession(cfg.StickySession, cfg.SessionTTL),
+		proxy.WithSessionStore(filepath.Join(confDir, "sessions.json")))
 
 	if err := proxyServer.Listen(); err != nil {
 		sendProgress(progressCh, fmt.Sprintf("❌ 代理端口监听失败: %v", err))

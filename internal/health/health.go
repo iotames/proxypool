@@ -39,12 +39,14 @@ func NewChecker(p *pool.Pool, interval, timeout, latencyMax int) *Checker {
 }
 
 // AddUnavailable 将不可用的节点加入待恢复列表。
+// 必须保存原始节点指针而非副本：代理池与 /api/nodes 共享同一节点对象，
+// 使用副本会让恢复后的节点在池中与展示列表中变成两份独立状态。
 func (c *Checker) AddUnavailable(n *node.Node) {
 	if n == nil {
 		return
 	}
 	c.mu.Lock()
-	c.unavailable[n.Name] = n.Clone()
+	c.unavailable[n.Name] = n
 	c.mu.Unlock()
 	log.Printf("节点(%s)已加入健康检查待恢复列表\n", n.Name)
 }

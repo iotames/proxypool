@@ -30,6 +30,8 @@ type Conf struct {
 	HealthInterval int    // 健康检查间隔（秒）
 	PoolMaxSize    int    // 代理池最大节点数（0 表示不限制）
 	BindAddress    string // 代理服务绑定 IP
+	StickySession  bool   // 粘性会话：按 Proxy-Authorization 用户名绑定节点，保证同一会话出口 IP 稳定
+	SessionTTL     int    // 粘性会话空闲过期时间（秒），0 表示不过期
 
 	// 内部引用，用于保存配置到 .env 文件
 	cf *easyconf.Conf
@@ -77,6 +79,8 @@ func Load(confDir string, parseFlags bool) (*Conf, error) {
 	cf.IntVar(&c.HealthInterval, "HEALTH_INTERVAL", 60, "健康检查间隔(秒)", "剔除节点后重测的时间间隔")
 	cf.IntVar(&c.PoolMaxSize, "POOL_MAX_SIZE", 0, "代理池最大节点数", "0 表示不限制")
 	cf.StringVar(&c.BindAddress, "BIND_ADDRESS", "127.0.0.1", "代理服务绑定IP地址")
+	cf.BoolVar(&c.StickySession, "STICKY_SESSION", true, "粘性会话(出口IP固定)", "客户端以 http://会话名:@127.0.0.1:端口 形式请求时，同一会话固定复用同一节点")
+	cf.IntVar(&c.SessionTTL, "SESSION_TTL", 600, "粘性会话空闲过期(秒)", "0 表示不过期；节点被移出代理池时会话立即失效并重新选路")
 
 	// 解析配置（包括命令行参数）
 	if err := cf.Parse(parseFlags); err != nil {

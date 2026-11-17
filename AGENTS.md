@@ -17,6 +17,13 @@
 2. `go mod tidy` 更新版本和 `go.sum`
 3. 重新取消注释 `replace` 恢复本地开发
 
+## 粘性会话（服务爬虫的关键能力）
+
+`internal/proxy` 通过 `Proxy-Authorization` 中的用户名实现会话级粘性：
+`http://会话名:@127.0.0.1:<port>` 的请求在 `SESSION_TTL` 内固定复用同一出口节点。
+实现要点：`handleConn` 必须先读完完整 HTTP 请求头（`readHTTPRequestHeader`），才能取到会话键再选节点；
+`Proxy-Authorization` / `Proxy-Connection` 属于代理层头部，绝不转发给目标服务器。
+修改协议分发时不要退回"只读 7 字节就选节点"的旧逻辑，否则会话键永远为空。
 ## 构建命令
 
 推荐使用 `make`（Windows 需安装 Git for Windows，Makefile 会自动定位其 bash；`make build` 自动识别平台并注入版本号与构建时间）：

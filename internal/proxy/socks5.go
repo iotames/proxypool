@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -12,15 +13,15 @@ import (
 
 // SOCKS5 协议常量。
 const (
-	socksVersion5        = 0x05
-	socksAuthNone        = 0x00
-	socksCmdConnect      = 0x01
-	socksAddrTypeIPv4    = 0x01
-	socksAddrTypeDomain  = 0x03
-	socksAddrTypeIPv6    = 0x04
-	socksReplySuccess    = 0x00
-	socksReplyFailure    = 0x01
-	socksReplyNotAllowed = 0x02
+	socksVersion5         = 0x05
+	socksAuthNone         = 0x00
+	socksCmdConnect       = 0x01
+	socksAddrTypeIPv4     = 0x01
+	socksAddrTypeDomain   = 0x03
+	socksAddrTypeIPv6     = 0x04
+	socksReplySuccess     = 0x00
+	socksReplyFailure     = 0x01
+	socksReplyNotAllowed  = 0x02
 	socksReplyUnreachable = 0x03
 )
 
@@ -28,20 +29,17 @@ const (
 //
 // SOCKS5 协议流程：
 //  1. 握手: 客户端发送 [0x05][nMethods][methods...]
-//          服务器回复 [0x05][selectedMethod]
+//     服务器回复 [0x05][selectedMethod]
 //  2. 请求: 客户端发送 [0x05][cmd][0x00][addrType][addr][port]
-//          服务器回复 [0x05][reply][0x00][addrType][addr][port]
+//     服务器回复 [0x05][reply][0x00][addrType][addr][port]
 //  3. 数据传输
-func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node, timeout int) {
-	reader := io.MultiReader(
-		bytesReader(initialBuf),
-		clientConn,
-	)
-
+//
+// 所有读取统一走 br，避免已缓冲字节丢失。
+func handleSOCKS5(clientConn net.Conn, br *bufio.Reader, targetNode *node.Node, timeout int) {
 	// === 第一步：握手 ===
 	// 读取 SOCKS5 握手包
 	handshake := make([]byte, 2)
-	if _, err := io.ReadFull(reader, handshake); err != nil {
+	if _, err := io.ReadFull(br, handshake); err != nil {
 		log.Printf("读取 SOCKS5 握手失败: %v\n", err)
 		return
 	}
@@ -55,14 +53,13 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 
 	// 读取认证方法列表
 	methods := make([]byte, nMethods)
-	if _, err := io.ReadFull(reader, methods); err != nil {
+	if _, err := io.ReadFull(br, methods); err != nil {
 		log.Printf("读取 SOCKS5 认证方法失败: %v\n", err)
 		return
 	}
 
 	// 选择无认证方式
-	_, err := clientConn.Write([]byte{socksVersion5, socksAuthNone})
-	if err != nil {
+	if _, err := clientConn.Write([]byte{socksVersion5, socksAuthNone}); err != nil {
 		log.Printf("发送 SOCKS5 握手响应失败: %v\n", err)
 		return
 	}
@@ -70,7 +67,7 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 	// === 第二步：请求 ===
 	// 读取请求头: [ver][cmd][rsv][addrType]
 	reqHeader := make([]byte, 4)
-	if _, err := io.ReadFull(clientConn, reqHeader); err != nil {
+	if _, err := io.ReadFull(br, reqHeader); err != nil {
 		log.Printf("读取 SOCKS5 请求头失败: %v\n", err)
 		return
 	}
@@ -89,7 +86,7 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 	switch addrType {
 	case socksAddrTypeIPv4:
 		addr := make([]byte, 4)
-		if _, err := io.ReadFull(clientConn, addr); err != nil {
+		if _, err := io.ReadFull(br, addr); err != nil {
 			log.Printf("读取 IPv4 地址失败: %v\n", err)
 			return
 		}
@@ -97,13 +94,13 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 
 	case socksAddrTypeDomain:
 		lenBuf := make([]byte, 1)
-		if _, err := io.ReadFull(clientConn, lenBuf); err != nil {
+		if _, err := io.ReadFull(br, lenBuf); err != nil {
 			log.Printf("读取域名长度失败: %v\n", err)
 			return
 		}
 		domainLen := int(lenBuf[0])
 		domain := make([]byte, domainLen)
-		if _, err := io.ReadFull(clientConn, domain); err != nil {
+		if _, err := io.ReadFull(br, domain); err != nil {
 			log.Printf("读取域名失败: %v\n", err)
 			return
 		}
@@ -111,7 +108,7 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 
 	case socksAddrTypeIPv6:
 		addr := make([]byte, 16)
-		if _, err := io.ReadFull(clientConn, addr); err != nil {
+		if _, err := io.ReadFull(br, addr); err != nil {
 			log.Printf("读取 IPv6 地址失败: %v\n", err)
 			return
 		}
@@ -125,7 +122,7 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 
 	// 解析端口
 	portBuf := make([]byte, 2)
-	if _, err := io.ReadFull(clientConn, portBuf); err != nil {
+	if _, err := io.ReadFull(br, portBuf); err != nil {
 		log.Printf("读取端口失败: %v\n", err)
 		return
 	}
@@ -142,7 +139,10 @@ func handleSOCKS5(clientConn net.Conn, initialBuf []byte, targetNode *node.Node,
 	defer remoteConn.Close()
 
 	// 获取代理服务器的本地地址用于在响应中返回
-	localAddr := clientConn.LocalAddr().(*net.TCPAddr)
+	localAddr, ok := clientConn.LocalAddr().(*net.TCPAddr)
+	if !ok {
+		localAddr = &net.TCPAddr{}
+	}
 
 	// 构建成功响应
 	response := buildSOCKS5Reply(socksReplySuccess, localAddr.IP, localAddr.Port)
@@ -175,23 +175,3 @@ func buildSOCKS5Reply(reply byte, bindIP net.IP, bindPort int) []byte {
 	resp[9] = byte(bindPort & 0xFF)
 	return resp
 }
-
-// bytesReader 将 []byte 转换为 io.Reader。
-func bytesReader(b []byte) io.Reader {
-	return &sliceReader{data: b}
-}
-
-type sliceReader struct {
-	data []byte
-	off  int
-}
-
-func (r *sliceReader) Read(p []byte) (int, error) {
-	if r.off >= len(r.data) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.data[r.off:])
-	r.off += n
-	return n, nil
-}
-

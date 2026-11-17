@@ -119,6 +119,20 @@ func (p *Pool) GetFastest() *node.Node {
 	return p.fixed
 }
 
+// Contains 判断指定名称的节点是否仍在代理池中。
+// 粘性会话据此判断旧绑定是否已失效。
+func (p *Pool) Contains(name string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	for _, n := range p.nodes {
+		if n.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // GetByName 返回池中指定名称节点的副本，不存在时返回 nil。
 func (p *Pool) GetByName(name string) *node.Node {
 	p.mu.RLock()

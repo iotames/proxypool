@@ -248,7 +248,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	running := s.running
 	starting := s.starting
+	proxyServer := s.proxy
 	s.mu.Unlock()
+
+	sessionCount := 0
+	if proxyServer != nil {
+		sessionCount = proxyServer.SessionCount()
+	}
 
 	allNodes := s.allNodesSnapshot()
 	totalNodes := len(allNodes)
@@ -265,6 +271,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"totalNodes":     totalNodes,
 		"availableNodes": availableNodes,
 		"avgLatency":     s.pool.AvgLatency(),
+		"sessionCount":   sessionCount,
 	}
 	s.jsonResponse(w, status)
 }
@@ -425,6 +432,8 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			"BIND_ADDRESS":    s.cfg.BindAddress,
 			"PORT":            s.cfg.Port,
 			"CONF_PATH":       s.cfg.ConfPath,
+			"STICKY_SESSION":  s.cfg.StickySession,
+			"SESSION_TTL":     s.cfg.SessionTTL,
 		})
 
 	case http.MethodPut:
@@ -458,6 +467,16 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 				s.cfg.Port = int(f)
 			}
 		}
+		if v, ok := updates["STICKY_SESSION"]; ok {
+			if b, ok := v.(bool); ok {
+				s.cfg.StickySession = b
+			}
+		}
+		if v, ok := updates["SESSION_TTL"]; ok {
+			if f, ok := v.(float64); ok {
+				s.cfg.SessionTTL = int(f)
+			}
+		}
 		if v, ok := updates["CONF_PATH"]; ok {
 			if str, ok := v.(string); ok {
 				s.cfg.ConfPath = str
@@ -476,7 +495,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleNodes 获取节点列表。
 // 返回全部已解析节点（含不可用节点），status 由测试结果决定：
-// 延迟超过 GOOGLE_TIMEOUT 的节点状态为 unavailable，不计入可用池。
+// GOOGLE_TIMEOUT 仅限制单段连接/读取耗时；延迟超过 LATENCY_MAX 才判为 unavailable。
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

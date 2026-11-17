@@ -31,7 +31,7 @@
 //
 // 配置项（.env 文件 / 环境变量）：
 //
-//	GOOGLE_TIMEOUT    int    谷歌连通性测试超时/毫秒，同时作为节点延迟阈值（默认 300）
+//	GOOGLE_TIMEOUT    int    谷歌连通性测试单段 I/O 超时/毫秒（默认 300），不作为延迟淘汰阈值
 //		HEALTH_INTERVAL   int    健康检查间隔/秒（默认 60）
 //		POOL_MAX_SIZE     int    代理池最大节点数（默认 0=不限制）
 //		BIND_ADDRESS      string 代理服务绑定 IP（默认 127.0.0.1）
@@ -92,6 +92,14 @@ func printVersion() {
 	fmt.Printf("Version: %s\n", Version)
 	fmt.Printf("BuildTime: %s\n", BuildTime)
 	fmt.Printf("GoVersion: %s\n", GoVersion)
+}
+
+// onOff 将布尔值转换为中文开关描述。
+func onOff(v bool) string {
+	if v {
+		return "开启"
+	}
+	return "关闭"
 }
 
 // runWebMode 启动 Web 控制台模式。
@@ -218,7 +226,9 @@ func runCLIMode(confDir string) {
 
 	// 启动代理服务
 	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed || cfg.Fast)
+	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed || cfg.Fast,
+		proxy.WithStickySession(cfg.StickySession, cfg.SessionTTL),
+		proxy.WithSessionStore(filepath.Join(confDir, "sessions.json")))
 	go func() {
 		if err := proxyServer.Start(); err != nil {
 			log.Fatalf("代理服务启动失败: %v\n", err)
@@ -269,7 +279,7 @@ func runCLIMode(confDir string) {
 	} else if cfg.Fast {
 		log.Printf("  模式: 快速模式（当前节点: %s，失效自动切换）", proxyPool.GetFastest().Name)
 	} else {
-		log.Printf("  模式: 随机分配")
+		log.Printf("  模式: 随机分配（粘性会话: %s）", onOff(cfg.StickySession))
 	}
 	log.Println("  按 Ctrl+C 停止服务")
 	log.Println("========================================")
