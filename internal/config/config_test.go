@@ -25,8 +25,8 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 	if cfg.GoogleTimeout != 300 {
 		t.Errorf("默认超时期望 300, 实际 %d", cfg.GoogleTimeout)
 	}
-	if cfg.TestURL != "https://www.google.com" {
-		t.Errorf("默认测试URL期望 'https://www.google.com', 实际 '%s'", cfg.TestURL)
+	if cfg.TestURL != "http://www.google.com" {
+		t.Errorf("默认测试URL期望 'http://www.google.com', 实际 '%s'", cfg.TestURL)
 	}
 	if cfg.HealthInterval != 60 {
 		t.Errorf("默认健康检查间隔期望 60, 实际 %d", cfg.HealthInterval)
@@ -73,5 +73,38 @@ func TestAutoCreateEnvFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(dir + "/default.env"); os.IsNotExist(err) {
 		t.Error("default.env 文件未被自动创建")
+	}
+}
+
+func TestApplyAndSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(dir, false)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+
+	err = cfg.Apply(map[string]interface{}{
+		"GOOGLE_TEST_URL": "https://example.com/health",
+		"LATENCY_MAX":     float64(250),
+		"STICKY_SESSION":  false,
+	})
+	if err != nil {
+		t.Fatalf("应用配置失败: %v", err)
+	}
+	snap := cfg.Snapshot()
+	if snap.TestURL != "https://example.com/health" || snap.LatencyMax != 250 || snap.StickySession {
+		t.Fatalf("快照未反映更新: %+v", snap)
+	}
+
+	// 任一字段非法时整体不提交
+	err = cfg.Apply(map[string]interface{}{
+		"LATENCY_MAX":     float64(100),
+		"HEALTH_INTERVAL": float64(0),
+	})
+	if err == nil {
+		t.Fatal("非法间隔应报错")
+	}
+	if got := cfg.Snapshot().LatencyMax; got != 250 {
+		t.Fatalf("非法更新不应部分提交, 实际 LATENCY_MAX=%d", got)
 	}
 }

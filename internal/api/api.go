@@ -339,11 +339,18 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
+	snap := s.cfg.Snapshot()
+	opts, err := node.NewTestOptions(snap.TestURL, snap.GoogleTimeout, snap.LatencyMax)
+	if err != nil {
+		s.jsonResponse(w, map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+
 	// 持有 nodesMu 直到测速结束，避免节点状态被并发读取时出现数据竞争
 	s.nodesMu.Lock()
 	nodes := make([]*node.Node, len(s.allNodes))
 	copy(nodes, s.allNodes)
-	total, available := health.RecheckAll(s.pool, nodes, s.cfg.GoogleTimeout, s.cfg.LatencyMax)
+	total, available := health.RecheckAll(s.pool, nodes, opts)
 	s.nodesMu.Unlock()
 
 	// 巡检期间可能已被停止或重新启动，丢弃本次结果并清空池
@@ -424,16 +431,18 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		snap := s.cfg.Snapshot()
 		s.jsonResponse(w, map[string]interface{}{
-			"GOOGLE_TIMEOUT":  s.cfg.GoogleTimeout,
-			"GOOGLE_TEST_URL": s.cfg.TestURL,
-			"HEALTH_INTERVAL": s.cfg.HealthInterval,
-			"POOL_MAX_SIZE":   s.cfg.PoolMaxSize,
-			"BIND_ADDRESS":    s.cfg.BindAddress,
-			"PORT":            s.cfg.Port,
-			"CONF_PATH":       s.cfg.ConfPath,
-			"STICKY_SESSION":  s.cfg.StickySession,
-			"SESSION_TTL":     s.cfg.SessionTTL,
+			"GOOGLE_TIMEOUT":  snap.GoogleTimeout,
+			"LATENCY_MAX":     snap.LatencyMax,
+			"GOOGLE_TEST_URL": snap.TestURL,
+			"HEALTH_INTERVAL": snap.HealthInterval,
+			"POOL_MAX_SIZE":   snap.PoolMaxSize,
+			"BIND_ADDRESS":    snap.BindAddress,
+			"PORT":            snap.Port,
+			"CONF_PATH":       snap.ConfPath,
+			"STICKY_SESSION":  snap.StickySession,
+			"SESSION_TTL":     snap.SessionTTL,
 		})
 
 	case http.MethodPut:
@@ -442,45 +451,18 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
-		if v, ok := updates["GOOGLE_TIMEOUT"]; ok {
-			if f, ok := v.(float64); ok {
-				s.cfg.GoogleTimeout = int(f)
-			}
-		}
-		if v, ok := updates["HEALTH_INTERVAL"]; ok {
-			if f, ok := v.(float64); ok {
-				s.cfg.HealthInterval = int(f)
-			}
-		}
-		if v, ok := updates["POOL_MAX_SIZE"]; ok {
-			if f, ok := v.(float64); ok {
-				s.cfg.PoolMaxSize = int(f)
-			}
-		}
-		if v, ok := updates["BIND_ADDRESS"]; ok {
+		// 测试目标必须是合法 URL：死配置或无效值不应写入并持久化。
+		if v, ok := updates["GOOGLE_TEST_URL"]; ok {
 			if str, ok := v.(string); ok {
-				s.cfg.BindAddress = str
+				if _, err := node.ParseTestTarget(str); err != nil {
+					s.jsonResponse(w, map[string]interface{}{"success": false, "error": err.Error()})
+					return
+				}
 			}
 		}
-		if v, ok := updates["PORT"]; ok {
-			if f, ok := v.(float64); ok {
-				s.cfg.Port = int(f)
-			}
-		}
-		if v, ok := updates["STICKY_SESSION"]; ok {
-			if b, ok := v.(bool); ok {
-				s.cfg.StickySession = b
-			}
-		}
-		if v, ok := updates["SESSION_TTL"]; ok {
-			if f, ok := v.(float64); ok {
-				s.cfg.SessionTTL = int(f)
-			}
-		}
-		if v, ok := updates["CONF_PATH"]; ok {
-			if str, ok := v.(string); ok {
-				s.cfg.ConfPath = str
-			}
+		if err := s.cfg.Apply(updates); err != nil {
+			s.jsonResponse(w, map[string]interface{}{"success": false, "error": err.Error()})
+			return
 		}
 		if err := s.cfg.Save(); err != nil {
 			s.jsonResponse(w, map[string]interface{}{"success": false, "error": err.Error()})

@@ -166,6 +166,7 @@ func runCLIMode(confDir string) {
 		cfg.Port, cfg.ConfPath, cfg.GoogleTimeout)
 
 	cfg.PrintConfig()
+	snap := cfg.Snapshot()
 
 	// 固定/快速代理模式提示
 	if cfg.Fixed {
@@ -183,12 +184,18 @@ func runCLIMode(confDir string) {
 		log.Println("========================================")
 	}
 
-	// 解析 Clash 配置文件
-	if !filepath.IsAbs(cfg.ConfPath) {
-		cfg.ConfPath = filepath.Join(confDir, cfg.ConfPath)
+	opts, err := node.NewTestOptions(snap.TestURL, snap.GoogleTimeout, snap.LatencyMax)
+	if err != nil {
+		log.Fatalf("测试目标配置无效: %v\n", err)
 	}
-	log.Printf("正在解析 Clash 配置文件: %s\n", cfg.ConfPath)
-	allNodes, err := clash.ParseFile(cfg.ConfPath)
+
+	// 解析 Clash 配置文件
+	confPath := snap.ConfPath
+	if !filepath.IsAbs(confPath) {
+		confPath = filepath.Join(confDir, confPath)
+	}
+	log.Printf("正在解析 Clash 配置文件: %s\n", confPath)
+	allNodes, err := clash.ParseFile(confPath)
 	if err != nil {
 		log.Fatalf("解析 Clash 配置文件失败: %v\n", err)
 	}
@@ -199,7 +206,7 @@ func runCLIMode(confDir string) {
 
 	// 测试节点连通性
 	log.Println("正在测试节点连通性（请稍候）...")
-	results := node.TestNodes(allNodes, cfg.GoogleTimeout, cfg.LatencyMax)
+	results := node.TestNodes(allNodes, opts)
 
 	proxyPool := pool.New(cfg.PoolMaxSize)
 
@@ -225,9 +232,9 @@ func runCLIMode(confDir string) {
 	}
 
 	// 启动代理服务
-	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, proxyPool, cfg.GoogleTimeout, cfg.Fixed || cfg.Fast,
-		proxy.WithStickySession(cfg.StickySession, cfg.SessionTTL),
+	proxyAddr := fmt.Sprintf("%s:%d", snap.BindAddress, snap.Port)
+	proxyServer := proxy.NewServer(proxyAddr, proxyPool, snap.GoogleTimeout, snap.Fixed || snap.Fast,
+		proxy.WithStickySession(snap.StickySession, snap.SessionTTL),
 		proxy.WithSessionStore(filepath.Join(confDir, "sessions.json")))
 	go func() {
 		if err := proxyServer.Start(); err != nil {
@@ -242,10 +249,10 @@ func runCLIMode(confDir string) {
 		log.Println("固定模式：跳过健康检查（HEALTH_INTERVAL 已忽略）")
 	case cfg.Fast:
 		// 快速模式：定时全量重测，原节点可用则保持，失效时切换到最快节点
-		fastChecker := health.NewFastChecker(proxyPool, allNodes, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
+		fastChecker := health.NewFastChecker(proxyPool, allNodes, cfg)
 		go fastChecker.Start()
 	default:
-		healthChecker = health.NewChecker(proxyPool, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
+		healthChecker = health.NewChecker(proxyPool, cfg)
 		// 将不可用节点加入健康检查待恢复列表，等待后续自动恢复
 		for _, result := range results {
 			if result.Status != "available" {
@@ -256,7 +263,7 @@ func runCLIMode(confDir string) {
 	}
 
 	// 启动 API 服务
-	apiAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port+1)
+	apiAddr := fmt.Sprintf("%s:%d", snap.BindAddress, snap.Port+1)
 	apiServer := api.NewServer(cfg, proxyPool)
 	apiServer.SetProxy(proxyServer)
 	apiServer.SetAllNodes(allNodes)

@@ -3,6 +3,7 @@ package health
 import (
 	"testing"
 
+	"github.com/iotames/proxypool/internal/config"
 	"github.com/iotames/proxypool/internal/node"
 	"github.com/iotames/proxypool/internal/pool"
 )
@@ -12,7 +13,11 @@ import (
 // 导致 /api/status 的池大小与 /api/nodes 的节点状态不一致。
 func TestCheckerAddUnavailableKeepsNodeIdentity(t *testing.T) {
 	p := pool.New(0)
-	c := NewChecker(p, 60, 300, 0)
+	cfg, err := config.Load(t.TempDir(), false)
+	if err != nil {
+		t.Fatalf("加载配置失败: %v", err)
+	}
+	c := NewChecker(p, cfg)
 	n := &node.Node{Name: "n1", Type: "trojan", Server: "127.0.0.1", Port: 1}
 	n.SetState(-1, "unavailable")
 

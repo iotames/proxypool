@@ -14,9 +14,28 @@ package config
 import (
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 
 	"github.com/iotames/easyconf"
 )
+
+// Snapshot 配置在某一时刻的一致性拷贝。
+// 运行时读取配置一律使用 Snapshot，避免与 Web 修改并发读写同一份字段。
+type Snapshot struct {
+	Port           int
+	ConfPath       string
+	Fixed          bool
+	Fast           bool
+	GoogleTimeout  int
+	LatencyMax     int
+	TestURL        string
+	HealthInterval int
+	PoolMaxSize    int
+	BindAddress    string
+	StickySession  bool
+	SessionTTL     int
+}
 
 // Conf 存储所有可配置项。
 type Conf struct {
@@ -32,6 +51,8 @@ type Conf struct {
 	BindAddress    string // 代理服务绑定 IP
 	StickySession  bool   // 粘性会话：按 Proxy-Authorization 用户名绑定节点，保证同一会话出口 IP 稳定
 	SessionTTL     int    // 粘性会话空闲过期时间（秒），0 表示不过期
+
+	mu sync.RWMutex // 保护运行期可被 Web API 修改的字段
 
 	// 内部引用，用于保存配置到 .env 文件
 	cf *easyconf.Conf
@@ -75,7 +96,7 @@ func Load(confDir string, parseFlags bool) (*Conf, error) {
 	// 环境变量配置项
 	cf.IntVar(&c.GoogleTimeout, "GOOGLE_TIMEOUT", 300, "谷歌连通性测试超时(毫秒)", "连接/读取超时；不再作为延迟淘汰阈值")
 	cf.IntVar(&c.LatencyMax, "LATENCY_MAX", 0, "节点延迟上限(毫秒)", "0 表示连通即可用、不按延迟淘汰；>0 时延迟超过该上限才判为不可用")
-	cf.StringVar(&c.TestURL, "GOOGLE_TEST_URL", "https://www.google.com", "连通性测试目标URL")
+	cf.StringVar(&c.TestURL, "GOOGLE_TEST_URL", "http://www.google.com", "连通性测试目标URL", "http/https 均可；https 会先完成 TLS 握手再探测，延迟含握手耗时")
 	cf.IntVar(&c.HealthInterval, "HEALTH_INTERVAL", 60, "健康检查间隔(秒)", "剔除节点后重测的时间间隔")
 	cf.IntVar(&c.PoolMaxSize, "POOL_MAX_SIZE", 0, "代理池最大节点数", "0 表示不限制")
 	cf.StringVar(&c.BindAddress, "BIND_ADDRESS", "127.0.0.1", "代理服务绑定IP地址")
@@ -91,10 +112,150 @@ func Load(confDir string, parseFlags bool) (*Conf, error) {
 	return c, nil
 }
 
+// Snapshot 返回当前配置的一致性拷贝。
+func (c *Conf) Snapshot() Snapshot {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return Snapshot{
+		Port:           c.Port,
+		ConfPath:       c.ConfPath,
+		Fixed:          c.Fixed,
+		Fast:           c.Fast,
+		GoogleTimeout:  c.GoogleTimeout,
+		LatencyMax:     c.LatencyMax,
+		TestURL:        c.TestURL,
+		HealthInterval: c.HealthInterval,
+		PoolMaxSize:    c.PoolMaxSize,
+		BindAddress:    c.BindAddress,
+		StickySession:  c.StickySession,
+		SessionTTL:     c.SessionTTL,
+	}
+}
+
+// Apply 校验并应用一组运行时配置更新（键为环境变量名）。
+// 全部校验通过后才原子提交，避免半更新状态；未知键忽略。
+func (c *Conf) Apply(updates map[string]interface{}) error {
+	snap := c.Snapshot()
+	for key, v := range updates {
+		switch key {
+		case "GOOGLE_TIMEOUT":
+			n, err := intValue(key, v, 1)
+			if err != nil {
+				return err
+			}
+			snap.GoogleTimeout = n
+		case "LATENCY_MAX":
+			n, err := intValue(key, v, 0)
+			if err != nil {
+				return err
+			}
+			snap.LatencyMax = n
+		case "GOOGLE_TEST_URL":
+			s, err := stringValue(key, v)
+			if err != nil {
+				return err
+			}
+			snap.TestURL = s
+		case "HEALTH_INTERVAL":
+			n, err := intValue(key, v, 1)
+			if err != nil {
+				return err
+			}
+			snap.HealthInterval = n
+		case "POOL_MAX_SIZE":
+			n, err := intValue(key, v, 0)
+			if err != nil {
+				return err
+			}
+			snap.PoolMaxSize = n
+		case "BIND_ADDRESS":
+			s, err := stringValue(key, v)
+			if err != nil {
+				return err
+			}
+			snap.BindAddress = s
+		case "PORT":
+			n, err := intValue(key, v, 1)
+			if err != nil {
+				return err
+			}
+			if n > 65535 {
+				return fmt.Errorf("PORT 必须在 1-65535 之间")
+			}
+			snap.Port = n
+		case "STICKY_SESSION":
+			b, ok := v.(bool)
+			if !ok {
+				return fmt.Errorf("STICKY_SESSION 必须是布尔值")
+			}
+			snap.StickySession = b
+		case "SESSION_TTL":
+			n, err := intValue(key, v, 0)
+			if err != nil {
+				return err
+			}
+			snap.SessionTTL = n
+		case "CONF_PATH":
+			s, err := stringValue(key, v)
+			if err != nil {
+				return err
+			}
+			snap.ConfPath = s
+		}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Port = snap.Port
+	c.ConfPath = snap.ConfPath
+	c.Fixed = snap.Fixed
+	c.Fast = snap.Fast
+	c.GoogleTimeout = snap.GoogleTimeout
+	c.LatencyMax = snap.LatencyMax
+	c.TestURL = snap.TestURL
+	c.HealthInterval = snap.HealthInterval
+	c.PoolMaxSize = snap.PoolMaxSize
+	c.BindAddress = snap.BindAddress
+	c.StickySession = snap.StickySession
+	c.SessionTTL = snap.SessionTTL
+	return nil
+}
+
+// intValue 将 JSON 数字转换为整数并校验下限。
+func intValue(key string, v interface{}, min int) (int, error) {
+	f, ok := v.(float64)
+	if !ok {
+		return 0, fmt.Errorf("%s 必须是数字", key)
+	}
+	n := int(f)
+	if float64(n) != f {
+		return 0, fmt.Errorf("%s 必须是整数", key)
+	}
+	if n < min {
+		return 0, fmt.Errorf("%s 不能小于 %d", key, min)
+	}
+	return n, nil
+}
+
+// stringValue 将 JSON 字符串取出并去除空白，禁止空值。
+func stringValue(key string, v interface{}) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s 必须是字符串", key)
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", fmt.Errorf("%s 不能为空", key)
+	}
+	return s, nil
+}
+
 // Save 将当前配置保存到 .env 文件。
 func (c *Conf) Save() error {
 	if c.cf == nil {
 		return nil
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.cf.UpdateFile("")
 }

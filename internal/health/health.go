@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iotames/proxypool/internal/config"
 	"github.com/iotames/proxypool/internal/node"
 	"github.com/iotames/proxypool/internal/pool"
 )
@@ -15,9 +16,7 @@ import (
 type Checker struct {
 	pool        *pool.Pool            // 代理池
 	unavailable map[string]*node.Node // 不可用的节点列表
-	interval    int                   // 检查间隔（秒）
-	timeout     int                   // 测试超时（毫秒）
-	latencyMax  int                   // 延迟上限（毫秒）
+	cfg         *config.Conf          // 配置源，每轮读取快照以支持热更新
 	mu          sync.Mutex            // 保护 unavailable
 	stopCh      chan struct{}
 	stopOnce    sync.Once
@@ -25,17 +24,29 @@ type Checker struct {
 
 // NewChecker 创建一个新的健康检查器。
 // p: 代理池，用于将恢复的节点重新加入。
-// interval: 检查间隔（秒）。
-// timeout: 节点测试超时（毫秒）。
-func NewChecker(p *pool.Pool, interval, timeout, latencyMax int) *Checker {
+// cfg: 配置源，巡检参数每轮从快照读取。
+func NewChecker(p *pool.Pool, cfg *config.Conf) *Checker {
 	return &Checker{
 		pool:        p,
 		unavailable: make(map[string]*node.Node),
-		interval:    interval,
-		timeout:     timeout,
-		latencyMax:  latencyMax,
+		cfg:         cfg,
 		stopCh:      make(chan struct{}),
 	}
+}
+
+// intervalOf 返回下一次检查间隔（秒），非法值回退 60 秒。
+func intervalOf(cfg *config.Conf) int {
+	iv := cfg.Snapshot().HealthInterval
+	if iv <= 0 {
+		return 60
+	}
+	return iv
+}
+
+// testOptions 由配置快照构造统一的测试参数。
+func testOptions(cfg *config.Conf) (node.TestOptions, error) {
+	snap := cfg.Snapshot()
+	return node.NewTestOptions(snap.TestURL, snap.GoogleTimeout, snap.LatencyMax)
 }
 
 // AddUnavailable 将不可用的节点加入待恢复列表。
@@ -53,16 +64,15 @@ func (c *Checker) AddUnavailable(n *node.Node) {
 
 // Start 启动定时健康检查循环。
 func (c *Checker) Start() {
-	ticker := time.NewTicker(time.Duration(c.interval) * time.Second)
-	defer ticker.Stop()
-
-	log.Printf("健康检查已启动，间隔: %d 秒\n", c.interval)
+	log.Printf("健康检查已启动，间隔: %d 秒\n", intervalOf(c.cfg))
 
 	for {
+		timer := time.NewTimer(time.Duration(intervalOf(c.cfg)) * time.Second)
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			c.check()
 		case <-c.stopCh:
+			timer.Stop()
 			log.Println("健康检查已停止")
 			return
 		}
@@ -91,7 +101,12 @@ func (c *Checker) check() {
 
 	log.Printf("开始健康检查，待恢复节点数: %d\n", len(nodes))
 
-	results := node.TestNodes(nodes, c.timeout, c.latencyMax)
+	opts, err := testOptions(c.cfg)
+	if err != nil {
+		log.Printf("健康检查已跳过: %v\n", err)
+		return
+	}
+	results := node.TestNodes(nodes, opts)
 	for _, result := range results {
 		if result.Status == "available" {
 			if c.pool.Add(result.Node) {

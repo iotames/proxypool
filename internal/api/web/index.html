@@ -30,6 +30,19 @@ body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f6fa; 
 .form-group label { font-size: 12px; color: #636e72; }
 .form-group input { border: 1px solid #dfe6e9; border-radius: 4px; padding: 8px 10px; font-size: 13px; outline: none; }
 .form-group input:focus { border-color: #0984e3; }
+.form-group.full { grid-column: 1 / -1; }
+.tip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: #dfe6e9; color: #636e72; font-size: 10px; cursor: pointer; user-select: none; vertical-align: middle; }
+.tip:hover, .tip.open { background: #0984e3; color: #fff; }
+.tip .tip-text { display: none; position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(100% + 8px); width: 240px; background: #2d3436; color: #fff; font-size: 12px; line-height: 1.6; font-weight: 400; text-align: left; padding: 8px 10px; border-radius: 6px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,.2); }
+.tip .tip-text::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: #2d3436; }
+.tip:hover .tip-text, .tip.open .tip-text { display: block; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; height: 35px; }
+.checkbox-row input[type=checkbox] { width: 16px; height: 16px; padding: 0; border: none; cursor: pointer; }
+.checkbox-row span { font-size: 13px; color: #2d3436; }
+.mode { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 400; vertical-align: middle; }
+.mode.live { background: #d4edda; color: #155724; }
+.mode.restart { background: #fff3cd; color: #856404; }
+.form-hint { margin-top: 10px; font-size: 12px; color: #636e72; }
 .log-area { background: #1e272e; color: #d2dae2; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; padding: 12px; border-radius: 6px; max-height: 200px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
 .log-area .done { color: #00b894; }
 .log-area .err { color: #d63031; }
@@ -62,30 +75,52 @@ th { color: #636e72; font-weight: 500; }
     <h2>配置</h2>
     <div class="form-grid">
       <div class="form-group">
-        <label>Clash 配置文件路径</label>
+        <label>Clash 配置文件路径 <span class="mode restart">重启生效</span></label>
         <input id="confPath" value="clash.yaml">
       </div>
       <div class="form-group">
-        <label>代理端口</label>
+        <label>代理端口 <span class="mode restart">重启生效</span></label>
         <input id="port" type="number" value="1080">
       </div>
+      <div class="form-group full">
+        <label>连通性测试目标URL <span class="mode live">热生效</span>
+          <span class="tip" onclick="toggleTip(event, this)">?<span class="tip-text">用于测试节点连通性，需选择可稳定访问的目标地址；https 目标会先完成 TLS 握手再探测，延迟含握手耗时</span></span>
+        </label>
+        <input id="testUrl" value="http://www.google.com">
+      </div>
       <div class="form-group">
-        <label>谷歌测试超时 (ms)</label>
+        <label>谷歌测试超时 (ms) <span class="mode live">热生效</span></label>
         <input id="timeout" type="number" value="300">
       </div>
       <div class="form-group">
-        <label>健康检查间隔 (秒)</label>
+        <label>节点延迟上限 (ms) <span class="mode live">热生效</span>
+          <span class="tip" onclick="toggleTip(event, this)">?<span class="tip-text">0 表示连通即可用、不按延迟淘汰；&gt;0 时延迟超过该上限才判为不可用</span></span>
+        </label>
+        <input id="latencyMax" type="number" value="0">
+      </div>
+      <div class="form-group">
+        <label>健康检查间隔 (秒) <span class="mode live">热生效</span></label>
         <input id="healthInterval" type="number" value="60">
       </div>
       <div class="form-group">
-        <label>池最大节点数 (0=不限)</label>
+        <label>池最大节点数 (0=不限) <span class="mode restart">重启生效</span></label>
         <input id="poolMaxSize" type="number" value="0">
       </div>
       <div class="form-group">
-        <label>绑定地址</label>
+        <label>绑定地址 <span class="mode restart">重启生效</span></label>
         <input id="bindAddress" value="127.0.0.1">
       </div>
+      <div class="form-group">
+        <label>粘性会话(出口IP固定) <span class="mode restart">重启生效</span>
+          <span class="tip" onclick="toggleTip(event, this)">?<span class="tip-text">客户端以 http://会话名:@127.0.0.1:端口 形式请求时，同一会话固定复用同一节点</span></span>
+        </label>
+        <div class="checkbox-row">
+          <input id="stickySession" type="checkbox" checked onchange="document.getElementById('stickySessionText').textContent = this.checked ? '已启用' : '已停用'">
+          <span id="stickySessionText">已启用</span>
+        </div>
+      </div>
     </div>
+    <p class="form-hint">「热生效」保存后下一轮巡检即使用新值；「重启生效」需点「停止」后再点「启动隧道代理」，代理端口与绑定地址的改动还需重启本程序。</p>
     <div style="display:flex;justify-content:flex-end;margin-top:12px">
       <button class="btn btn-success" onclick="updateConfig()">💾 更新</button>
     </div>
@@ -136,9 +171,14 @@ async function loadConfig() {
     document.getElementById('confPath').value = data.CONF_PATH || 'clash.yaml';
     document.getElementById('port').value = data.PORT || 1080;
     document.getElementById('timeout').value = data.GOOGLE_TIMEOUT || 300;
+    document.getElementById('testUrl').value = data.GOOGLE_TEST_URL || 'https://www.google.com';
+    document.getElementById('latencyMax').value = data.LATENCY_MAX || 0;
     document.getElementById('healthInterval').value = data.HEALTH_INTERVAL || 60;
     document.getElementById('poolMaxSize').value = data.POOL_MAX_SIZE || 0;
     document.getElementById('bindAddress').value = data.BIND_ADDRESS || '127.0.0.1';
+    const sticky = data.STICKY_SESSION !== false;
+    document.getElementById('stickySession').checked = sticky;
+    document.getElementById('stickySessionText').textContent = sticky ? '已启用' : '已停用';
   } catch(e) {}
 }
 
@@ -148,9 +188,12 @@ async function saveConfig() {
     CONF_PATH: document.getElementById('confPath').value,
     PORT: parseInt(document.getElementById('port').value),
     GOOGLE_TIMEOUT: parseInt(document.getElementById('timeout').value),
+    GOOGLE_TEST_URL: document.getElementById('testUrl').value.trim(),
+    LATENCY_MAX: parseInt(document.getElementById('latencyMax').value) || 0,
     HEALTH_INTERVAL: parseInt(document.getElementById('healthInterval').value),
     POOL_MAX_SIZE: parseInt(document.getElementById('poolMaxSize').value),
     BIND_ADDRESS: document.getElementById('bindAddress').value,
+    STICKY_SESSION: document.getElementById('stickySession').checked,
   };
   const resp = await fetchJSON('/api/config', {
     method: 'PUT',
@@ -162,6 +205,16 @@ async function saveConfig() {
   }
   return resp;
 }
+
+function toggleTip(e, el) {
+  e.stopPropagation();
+  document.querySelectorAll('.tip.open').forEach(t => { if (t !== el) t.classList.remove('open'); });
+  el.classList.toggle('open');
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.tip.open').forEach(t => t.classList.remove('open'));
+});
 
 // 更新配置（独立按钮）
 async function updateConfig() {

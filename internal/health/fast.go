@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iotames/proxypool/internal/config"
 	"github.com/iotames/proxypool/internal/node"
 	"github.com/iotames/proxypool/internal/pool"
 )
@@ -14,43 +15,37 @@ import (
 //   - 当前固定节点仍可用时保持不变，避免出口 IP 频繁跳动触发验证码；
 //   - 当前固定节点不可用（掉出可用池）时，自动切换到池中最快节点。
 type FastChecker struct {
-	pool       *pool.Pool   // 代理池
-	nodes      []*node.Node // 全部节点（含已被剔除的节点，用于恢复）
-	interval   int          // 检查间隔（秒）
-	timeout    int          // 节点测试超时（毫秒）
-	latencyMax int          // 节点延迟上限（毫秒）
-	stopCh     chan struct{}
-	stopOnce   sync.Once
+	pool     *pool.Pool   // 代理池
+	nodes    []*node.Node // 全部节点（含已被剔除的节点，用于恢复）
+	cfg      *config.Conf // 配置源，每轮读取快照以支持热更新
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewFastChecker 创建一个快速模式健康检查器。
 // p: 代理池。
 // nodes: 配置文件中的全部节点。
-// interval: 检查间隔（秒）。
-// timeout: 节点测试超时（毫秒），超过该值的节点视为掉出可用池。
-func NewFastChecker(p *pool.Pool, nodes []*node.Node, interval, timeout, latencyMax int) *FastChecker {
+// cfg: 配置源，巡检参数每轮从快照读取。
+func NewFastChecker(p *pool.Pool, nodes []*node.Node, cfg *config.Conf) *FastChecker {
 	return &FastChecker{
-		pool:       p,
-		nodes:      nodes,
-		interval:   interval,
-		timeout:    timeout,
-		latencyMax: latencyMax,
-		stopCh:     make(chan struct{}),
+		pool:   p,
+		nodes:  nodes,
+		cfg:    cfg,
+		stopCh: make(chan struct{}),
 	}
 }
 
 // Start 启动定时重测循环。
 func (c *FastChecker) Start() {
-	ticker := time.NewTicker(time.Duration(c.interval) * time.Second)
-	defer ticker.Stop()
-
-	log.Printf("快速模式健康检查已启动，间隔: %d 秒\n", c.interval)
+	log.Printf("快速模式健康检查已启动，间隔: %d 秒\n", intervalOf(c.cfg))
 
 	for {
+		timer := time.NewTimer(time.Duration(intervalOf(c.cfg)) * time.Second)
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			c.check()
 		case <-c.stopCh:
+			timer.Stop()
 			log.Println("快速模式健康检查已停止")
 			return
 		}
@@ -72,7 +67,12 @@ func (c *FastChecker) check() {
 		currentName = current.Name
 	}
 
-	results := node.TestNodes(c.nodes, c.timeout, c.latencyMax)
+	opts, err := testOptions(c.cfg)
+	if err != nil {
+		log.Printf("快速模式健康检查已跳过: %v\n", err)
+		return
+	}
+	results := node.TestNodes(c.nodes, opts)
 	for _, result := range results {
 		if result.Status == "available" {
 			// 已在池中的节点延迟由共享指针就地更新；新恢复的节点则重新入池

@@ -35,7 +35,15 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 	log.Println("=== 开始启动隧道代理 ===")
 	sendProgress(progressCh, "正在读取 Clash 配置...")
 
-	allNodes, err := clash.ParseFile(cfg.ConfPath)
+	// 启动流程开始时取一次一致快照，避免与 Web 端修改配置并发读写。
+	snap := cfg.Snapshot()
+	opts, err := node.NewTestOptions(snap.TestURL, snap.GoogleTimeout, snap.LatencyMax)
+	if err != nil {
+		sendProgress(progressCh, fmt.Sprintf("❌ %v", err))
+		return nil, err
+	}
+
+	allNodes, err := clash.ParseFile(snap.ConfPath)
 	if err != nil {
 		sendProgress(progressCh, fmt.Sprintf("❌ 解析 Clash 配置文件失败: %v", err))
 		return nil, fmt.Errorf("解析 Clash 配置文件失败: %w", err)
@@ -55,9 +63,9 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 	}
 
 	sendProgress(progressCh, "正在测试节点连通性...")
-	results := node.TestNodes(allNodes, cfg.GoogleTimeout, cfg.LatencyMax)
+	results := node.TestNodes(allNodes, opts)
 
-	healthChecker := health.NewChecker(p, cfg.HealthInterval, cfg.GoogleTimeout, cfg.LatencyMax)
+	healthChecker := health.NewChecker(p, cfg)
 
 	availableCount := 0
 	for _, result := range results {
@@ -85,9 +93,9 @@ func runProxy(confDir string, cfg *config.Conf, p *pool.Pool, progressCh chan<- 
 	sendProgress(progressCh, fmt.Sprintf("✅ 可用节点: %d / %d", availableCount, len(allNodes)))
 
 	// 启动代理服务：先同步监听，端口占用等问题直接反馈给调用方
-	proxyAddr := fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.Port)
-	proxyServer := proxy.NewServer(proxyAddr, p, cfg.GoogleTimeout, false,
-		proxy.WithStickySession(cfg.StickySession, cfg.SessionTTL),
+	proxyAddr := fmt.Sprintf("%s:%d", snap.BindAddress, snap.Port)
+	proxyServer := proxy.NewServer(proxyAddr, p, snap.GoogleTimeout, false,
+		proxy.WithStickySession(snap.StickySession, snap.SessionTTL),
 		proxy.WithSessionStore(filepath.Join(confDir, "sessions.json")))
 
 	if err := proxyServer.Listen(); err != nil {
